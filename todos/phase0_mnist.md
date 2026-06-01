@@ -7,21 +7,21 @@ Validate the complete MAE training stack on a clean dataset before introducing F
 
 ## 1. Project Scaffolding
 
-- [ ] Create `src/` subdirectories: `models/`, `data/`, `training/`, `utils/`, `evaluation/`
-- [ ] Create `configs/`, `scripts/`, `tests/`, `experiments/` directories
-- [ ] Add `__init__.py` files where needed for package imports
-- [ ] Create `experiments/MODEL_CHANGELOG.md` with header template
+- [x] Create `src/` subdirectories: `models/`, `data/`, `training/`, `utils/`, `evaluation/`
+- [x] Create `configs/`, `scripts/`, `tests/`, `experiments/` directories
+- [x] Add `__init__.py` files where needed for package imports
+- [x] Create `experiments/MODEL_CHANGELOG.md` with header template
 
 ---
 
 ## 2. Configuration & Utilities
 
-- [ ] Define `MNISTConfig` dataclass (image size, patch size, mask ratio, batch/accum, LR, epochs, seed)
-- [ ] Write `src/utils/seed.py`: `set_seed(seed: int)` helper setting `torch`, `numpy`, `random`, `torch.cuda`
-- [ ] Write `src/utils/device.py`: `get_device()` returning `torch.device` with CPU fallback
-- [ ] Write `src/utils/checkpoint.py`: `save_checkpoint()` and `load_checkpoint()` using state-dict dicts
-- [ ] Write `src/utils/plot_style.py`: unified matplotlib style sheet (fonts, palette, line weights, figure size) for publication-ready figures
-- [ ] Save a sample config to `configs/phase0_mnist.yaml`
+- [x] Define `MNISTConfig` dataclass (image size, patch size, mask ratio, batch/accum, LR, epochs, seed)
+- [x] Write `src/utils/seed.py`: `set_seed(seed: int)` helper setting `torch`, `numpy`, `random`, `torch.cuda`
+- [x] Write `src/utils/device.py`: `get_device()` returning `torch.device` with CPU fallback
+- [x] Write `src/utils/checkpoint.py`: `save_checkpoint()` and `load_checkpoint()` using state-dict dicts
+- [x] Write `src/utils/plot_style.py`: unified matplotlib style sheet (fonts, palette, line weights, figure size) for publication-ready figures
+- [x] Save a sample config to `configs/phase0_mnist.yaml`
 
 ---
 
