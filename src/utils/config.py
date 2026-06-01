@@ -23,7 +23,7 @@ class MNISTConfig:
 
     # Masking
     mask_ratio: float = 0.75
-    block_masking: bool = True
+    use_block_masking: bool = True
     block_size: int = 2
 
     # Model
@@ -33,6 +33,7 @@ class MNISTConfig:
     mlp_ratio: float = 4.0
     decoder_embed_dim: int = 256
     decoder_depth: int = 4
+    decoder_num_heads: int = 8
 
     # Training
     batch_size: int = 8

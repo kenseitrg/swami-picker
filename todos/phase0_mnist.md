@@ -27,34 +27,34 @@ Validate the complete MAE training stack on a clean dataset before introducing F
 
 ## 3. Data Pipeline
 
-- [ ] Write `src/data/mnist_dataset.py`: torchvision MNIST download → resize 256×256 bilinear → normalize to `[-1, 1]` or zero-mean
-- [ ] Configure DataLoader with `batch_size=8`, `num_workers=0` (MNIST is small), `pin_memory=True`
-- [ ] Verify output tensor shape: `(B, 1, 256, 256)`
+- [x] Write `src/data/mnist_dataset.py`: torchvision MNIST download → resize 256×256 bilinear → normalize to zero-mean
+- [x] Configure DataLoader with `batch_size=8`, `num_workers=0` (MNIST is small), `pin_memory=True`
+- [x] Verify output tensor shape: `(B, 1, 256, 256)`
 
 ---
 
 ## 4. MAE Model Skeleton
 
 ### 4.1 Patching
-- [ ] Implement `patchify(x: Tensor) -> Tensor`: `(B, C, H, W) → (B, N, patch_dim)` where `N = (H/p)×(W/p)`
-- [ ] Implement `unpatchify(x: Tensor) -> Tensor`: reverse mapping
+- [x] Implement `patchify(x: Tensor) -> Tensor`: `(B, C, H, W) → (B, N, patch_dim)` where `N = (H/p)×(W/p)`
+- [x] Implement `unpatchify(x: Tensor) -> Tensor`: reverse mapping
 
 ### 4.2 Masking
-- [ ] Implement `random_masking(x: Tensor, mask_ratio: float) -> (x_masked, mask, ids_restore)`
-- [ ] Implement `block_masking(x: Tensor, mask_ratio: float, block_size: int = 2) -> ...` (2×2 patch groups)
-- [ ] Default to **block masking** for this phase
+- [x] Implement `random_masking(x: Tensor, mask_ratio: float) -> (x_masked, mask, ids_restore)`
+- [x] Implement `block_masking(x: Tensor, mask_ratio: float, block_size: int = 2) -> ...` (2×2 patch groups)
+- [x] Default to **block masking** for this phase
 
 ### 4.3 Encoder
-- [ ] Build ViT-style encoder: `nn.Linear` patch embedding + positional embeddings + Transformer blocks
-- [ ] Config: `embed_dim=384`, `depth=12`, `num_heads=6`, `mlp_ratio=4`
-- [ ] Encoder must process **only unmasked tokens** to save compute/VRAM
+- [x] Build ViT-style encoder: `nn.Linear` patch embedding + positional embeddings + Transformer blocks
+- [x] Config: `embed_dim=384`, `depth=12`, `num_heads=6`, `mlp_ratio=4`
+- [x] Encoder must process **only unmasked tokens** to save compute/VRAM
 
 ### 4.4 Decoder
-- [ ] Lightweight decoder: re-add mask tokens → small Transformer (e.g., `depth=4`, `embed_dim=256`) → linear head to `patch_dim`
-- [ ] Decoder reconstructs **all patches**, loss computed only on masked ones
+- [x] Lightweight decoder: re-add mask tokens → small Transformer (e.g., `depth=4`, `embed_dim=256`) → linear head to `patch_dim`
+- [x] Decoder reconstructs **all patches**, loss computed only on masked ones
 
 ### 4.5 Forward Pass
-- [ ] `MAE.forward(x)` → `loss, pred, mask` using MSE on masked patches
+- [x] `MAE.forward(x)` → `loss, pred, mask` using MSE on masked patches
 
 ---
 
@@ -136,5 +136,4 @@ All figures must use `src/utils/plot_style.py`, be reproducible (seeded sampling
 
 - [ ] Add docstrings to all public functions/classes (Google style)
 - [ ] Run `ruff check .` and `ruff format .` — must pass
-- [ ] Run `ty .` — must pass
-- [ ] Commit with message convention: `phase0: <component> — <what changed>`
+- [ ] Run `ty check .` — must pass
