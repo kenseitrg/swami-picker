@@ -205,6 +205,19 @@ swami-picker/
 
 ---
 
+## 8. Visualization & Publication Quality
+
+All data transformations, model behaviour, and results must be accompanied by clear visual evidence. Figures are a first-class deliverable intended for eventual publication.
+
+- **Default to a figure**: whenever a script produces metrics, distributions, or spatial/spectral data, it must also emit a corresponding chart, graph, or illustrative example.
+- **Clarity over embellishment**: every plot must accurately represent the underlying data. Avoid misleading axis scaling, truncated colour bars, or ambiguous legends.
+- **Demonstrate transformations**: for every preprocessing step (resizing, masking, normalization, coordinate transforms), provide before/after panels that make the effect unambiguous.
+- **Consistent style**: establish a single matplotlib style sheet (e.g., `src/utils/plot_style.py`) and apply it to all figures. Define uniform colour palettes, font sizes, line weights, and figure dimensions so that panels from different phases are visually compatible.
+- **High-resolution exports**: save publication-ready figures as vector graphics (PDF/SVG) or high-DPI PNG (≥300 dpi) in the experiment run directory. Embed concise, informative captions in filenames or adjacent text files.
+- **Reproducible plotting**: plotting code must accept a `save_path: Path | None` argument and be runnable headless (no `plt.show()` blocking in scripts). Random or sampled examples must be seeded so the exact same figure can be regenerated from a checkpoint.
+
+---
+
 ## 7. Review & Iteration
 
 These rules are a living document. Propose changes via:
