@@ -60,12 +60,13 @@ class TransformerBlock(nn.Module):
         Returns:
             Output tensor of shape ``(B, N, D)``.
         """
+        x_norm = self.norm1(x)
         x = (
             x
             + self.attn(
-                self.norm1(x),
-                self.norm1(x),
-                self.norm1(x),
+                x_norm,
+                x_norm,
+                x_norm,
                 need_weights=False,
             )[0]
         )
@@ -109,8 +110,7 @@ class MaskedAutoencoder(nn.Module):
             in_channels: Number of input channels.
             embed_dim: Encoder embedding dimension.
             depth: Number of encoder Transformer blocks.
-            num_heads: Number of attention heads (shared by encoder
-                and decoder).
+            num_heads: Number of attention heads in the encoder.
             mlp_ratio: MLP hidden dim ratio.
             decoder_embed_dim: Decoder embedding dimension.
             decoder_depth: Number of decoder Transformer blocks.
@@ -272,7 +272,7 @@ class MaskedAutoencoder(nn.Module):
             Same return signature as :meth:`random_masking`.
 
         Raises:
-            AssertionError: If ``N`` is not a perfect square or if
+            ValueError: If ``N`` is not a perfect square or if
                 ``block_size`` does not divide ``sqrt(N)``.
         """
         B, N, D = x.shape
@@ -300,7 +300,6 @@ class MaskedAutoencoder(nn.Module):
         len_keep_blocks = int(num_blocks * (1 - self.mask_ratio))
         noise = torch.rand(B, num_blocks, device=x.device)
         block_ids_shuffle = torch.argsort(noise, dim=1)
-        block_ids_restore = torch.argsort(block_ids_shuffle, dim=1)
 
         # Gather kept blocks
         block_ids_keep = block_ids_shuffle[:, :len_keep_blocks]
@@ -312,12 +311,6 @@ class MaskedAutoencoder(nn.Module):
             .expand(-1, -1, patches_per_block, D),
         )
         x_masked = x_kept.reshape(B, len_keep_blocks * patches_per_block, D)
-
-        # Mask: 1 = masked, 0 = visible
-        mask_blocks = torch.ones(B, num_blocks, device=x.device)
-        mask_blocks[:, :len_keep_blocks] = 0
-        mask_blocks = torch.gather(mask_blocks, dim=1, index=block_ids_restore)
-        mask = mask_blocks.repeat_interleave(patches_per_block, dim=1)
 
         # ids_restore at patch level
         patch_grid = torch.arange(N, device=x.device).reshape(sqrt_N, sqrt_N)
@@ -336,6 +329,11 @@ class MaskedAutoencoder(nn.Module):
         )
         ids_shuffle_flat = patch_shuffled.reshape(B, N)
         ids_restore = torch.argsort(ids_shuffle_flat, dim=1)
+
+        # Mask: 1 = masked, 0 = visible
+        mask = torch.ones(B, N, device=x.device)
+        mask[:, :len_keep_blocks * patches_per_block] = 0
+        mask = torch.gather(mask, dim=1, index=ids_restore)
 
         return x_masked, mask, ids_restore
 
@@ -418,7 +416,7 @@ class MaskedAutoencoder(nn.Module):
         target = self.patchify(imgs)
         loss = (pred - target) ** 2
         loss = loss.mean(dim=-1)  # (B, N)
-        loss = (loss * mask).sum() / mask.sum()
+        loss = (loss * mask).sum() / (mask.sum() + 1e-8)
         return loss
 
     def forward(self, imgs: Tensor) -> tuple[Tensor, Tensor, Tensor]:

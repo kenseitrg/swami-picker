@@ -12,3 +12,4 @@ wheels/
 /data/
 experiments/*/
 !experiments/MODEL_CHANGELOG.md
+/literature/
