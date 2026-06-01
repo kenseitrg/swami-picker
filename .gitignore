@@ -9,4 +9,7 @@ wheels/
 # Virtual environments
 .venv
 
+# Data & experiments
 data/
+experiments/*/
+!experiments/MODEL_CHANGELOG.md
