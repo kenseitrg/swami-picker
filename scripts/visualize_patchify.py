@@ -128,9 +128,7 @@ def main() -> None:
                 fontsize=4,
                 color="white",
                 path_effects=[
-                    path_effects.withStroke(
-                        linewidth=1.5, foreground="black"
-                    )
+                    path_effects.withStroke(linewidth=1.5, foreground="black")
                 ],
             )
     ax.set_xlim(-0.5, img_h - 0.5)

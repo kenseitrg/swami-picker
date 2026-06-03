@@ -332,7 +332,7 @@ class MaskedAutoencoder(nn.Module):
 
         # Mask: 1 = masked, 0 = visible
         mask = torch.ones(B, N, device=x.device)
-        mask[:, :len_keep_blocks * patches_per_block] = 0
+        mask[:, : len_keep_blocks * patches_per_block] = 0
         mask = torch.gather(mask, dim=1, index=ids_restore)
 
         return x_masked, mask, ids_restore
@@ -416,7 +416,7 @@ class MaskedAutoencoder(nn.Module):
         target = self.patchify(imgs)
         loss = (pred - target) ** 2
         loss = loss.mean(dim=-1)  # (B, N)
-        loss = (loss * mask).sum() / (mask.sum() + 1e-8)
+        loss = (loss * mask).sum() / (mask.sum() + 1e-5)
         return loss
 
     def forward(self, imgs: Tensor) -> tuple[Tensor, Tensor, Tensor]:

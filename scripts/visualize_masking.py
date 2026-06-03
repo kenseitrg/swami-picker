@@ -37,7 +37,9 @@ def _apply_mask_to_image(
         Images with masked patches zeroed out, shape ``(B, C, H, W)``.
     """
     patches = model.patchify(imgs)  # (B, N, patch_dim)
-    mask_expanded = mask.unsqueeze(-1).expand_as(patches).to(patches.device)  # (B, N, patch_dim)
+    mask_expanded = (
+        mask.unsqueeze(-1).expand_as(patches).to(patches.device)
+    )  # (B, N, patch_dim)
     patches_masked = patches * (1 - mask_expanded)  # zero out masked patches
     imgs_masked = model.unpatchify(patches_masked)
     return imgs_masked

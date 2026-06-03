@@ -61,11 +61,11 @@ Validate the complete MAE training stack on a clean dataset before introducing F
 ## 5. Training Loop
 
 ### 5.1 Setup
-- [ ] Instantiate model, move to device
-- [ ] Optimizer: `AdamW(..., fused=True)`, LR `1e-4`, betas `(0.9, 0.95)`, weight decay `0.05`
-- [ ] Scheduler: 10% linear warmup → cosine decay to 10% of peak
-- [ ] AMP: `torch.amp.autocast("cuda", dtype=torch.float16)` + `GradScaler()`
-- [ ] Gradient clipping: `nn.utils.clip_grad_norm_(..., max_norm=1.0)`
+- [x] Instantiate model, move to device
+- [x] Optimizer: `AdamW(..., fused=True)`, LR `1e-4`, betas `(0.9, 0.95)`, weight decay `0.05`
+- [x] Scheduler: 10% linear warmup → cosine decay to 10% of peak
+- [x] AMP: `torch.amp.autocast("cuda", dtype=torch.float16)` + `GradScaler()`
+- [x] Gradient clipping: `nn.utils.clip_grad_norm_(..., max_norm=1.0)`
 
 ### 5.2 Loop Structure
 ```
@@ -80,11 +80,11 @@ for epoch in epochs:
             scheduler.step()
             optimizer.zero_grad()
 ```
-- [ ] Log loss, LR, and VRAM peak every epoch
+- [x] Log loss, LR, and VRAM peak every epoch
 
 ### 5.3 Validation
-- [ ] Run reconstruction loss on held-out test set every epoch
-- [ ] Track best validation loss for checkpointing
+- [x] Run reconstruction loss on held-out test set every epoch
+- [x] Track best validation loss for checkpointing
 
 ---
 
@@ -102,16 +102,17 @@ All figures must use `src/utils/plot_style.py`, be reproducible (seeded sampling
 
 ## 7. Checkpointing & Resume
 
-- [ ] Save checkpoint dict with: `model`, `optimizer`, `scaler`, `scheduler`, `epoch`, `step`, `seed`, `config`
-- [ ] Implement resume: load checkpoint → restore all states → verify loss curve continuity for 2 steps
+- [x] Save checkpoint dict with: `model`, `optimizer`, `scaler`, `scheduler`, `epoch`, `step`, `seed`, `config`
+- [x] Implement resume: load checkpoint → restore all states
+- [ ] Verify loss curve continuity for 2 steps after resume
 - [ ] Verify no regression in loss after resume
 
 ---
 
 ## 8. VRAM & Performance Profiling
 
-- [ ] Log `torch.cuda.max_memory_allocated()` after every epoch
-- [ ] Log throughput: samples/sec averaged over epoch
+- [x] Log `torch.cuda.max_memory_allocated()` after every epoch
+- [x] Log throughput: samples/sec averaged over epoch
 - [ ] **Target:** Peak VRAM < 4.5 GB
 - [ ] If VRAM > 5.5 GB: reduce patch size to 8 or disable gradient accumulation as fallback
 
