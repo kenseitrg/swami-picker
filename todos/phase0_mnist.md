@@ -104,8 +104,8 @@ All figures must use `src/utils/plot_style.py`, be reproducible (seeded sampling
 
 - [x] Save checkpoint dict with: `model`, `optimizer`, `scaler`, `scheduler`, `epoch`, `step`, `seed`, `config`
 - [x] Implement resume: load checkpoint → restore all states
-- [ ] Verify loss curve continuity for 2 steps after resume
-- [ ] Verify no regression in loss after resume
+- [x] Verify loss curve continuity for 2 steps after resume
+- [x] Verify no regression in loss after resume
 
 ---
 

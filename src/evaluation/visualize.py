@@ -79,6 +79,7 @@ def plot_reconstruction_grid(
     rng = np.random.default_rng(seed)
     indices = rng.choice(len(images), size=min(num_samples, len(images)), replace=False)
     imgs = images[indices].to(device)
+    actual_samples = len(imgs)
 
     model.eval()
     with torch.no_grad():
@@ -87,12 +88,12 @@ def plot_reconstruction_grid(
     recon = model.unpatchify(pred).cpu()
     masked = _create_masked_image(imgs.cpu(), mask.cpu(), model.patch_size)
 
-    fig, axes = plt.subplots(num_samples, 3, figsize=(6, 2 * num_samples))
-    if num_samples == 1:
+    fig, axes = plt.subplots(actual_samples, 3, figsize=(6, 2 * actual_samples))
+    if actual_samples == 1:
         axes = axes.reshape(1, -1)
 
     titles = ["Input", "Masked", "Reconstructed"]
-    for row in range(num_samples):
+    for row in range(actual_samples):
         # Shared vmin/vmax per row based on the original input
         row_input = imgs[row, 0].cpu().numpy()
         vmin, vmax = row_input.min(), row_input.max()
@@ -127,7 +128,8 @@ def plot_masking_examples(
         num_samples: Number of samples to display.
     """
     apply_style()
-    imgs = images[:num_samples].to(device)
+    actual_samples = min(num_samples, len(images))
+    imgs = images[:actual_samples].to(device)
 
     model.eval()
     with torch.no_grad():
@@ -135,10 +137,10 @@ def plot_masking_examples(
 
     masked = _create_masked_image(imgs.cpu(), mask.cpu(), model.patch_size)
 
-    fig, axes = plt.subplots(2, num_samples, figsize=(2 * num_samples, 4))
-    if num_samples == 1:
+    fig, axes = plt.subplots(2, actual_samples, figsize=(2 * actual_samples, 4))
+    if actual_samples == 1:
         axes = axes.reshape(2, 1)
-    for i in range(num_samples):
+    for i in range(actual_samples):
         axes[0, i].imshow(imgs[i, 0].cpu().numpy(), cmap="gray")
         axes[0, i].axis("off")
         if i == 0:

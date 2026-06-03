@@ -365,10 +365,10 @@ class MAETrainer:
 
         rng_state = checkpoint.get("rng_state")
         if rng_state is not None:
-            torch.set_rng_state(rng_state["torch"])
+            torch.set_rng_state(rng_state["torch"].cpu())
             cuda_rng = rng_state.get("cuda")
             if cuda_rng is not None and self.device.type == "cuda":
-                torch.cuda.set_rng_state_all(cuda_rng)
+                torch.cuda.set_rng_state_all([s.cpu() for s in cuda_rng])
 
         logger.info(
             "Resumed from epoch %d, step %d",
