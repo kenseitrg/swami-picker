@@ -28,6 +28,36 @@ except ImportError:
 logger = logging.getLogger(__name__)
 
 
+def _composite_reconstruction(
+    imgs: Tensor, pred: Tensor, mask: Tensor, model: MaskedAutoencoder
+) -> Tensor:
+    """Build a composite image replacing only masked patches with predictions.
+
+    Unmasked patches keep the original pixel values; masked patches use the
+    model's predicted values.  This matches the standard MAE visualisation
+    style (He et al., 2022).
+
+    Args:
+        imgs: Original images ``(B, C, H, W)``.
+        pred: Predicted patches ``(B, N, patch_dim)``.
+        mask: Binary mask ``(B, N)`` where ``1`` = masked.
+        model: The MAE model (provides ``patchify`` / ``unpatchify``).
+
+    Returns:
+        Composite image ``(B, C, H, W)``.
+    """
+    # Convert original to patch space
+    patches = model.patchify(imgs)  # (B, N, patch_dim)
+
+    # Expand mask to match patch_dim (same dim repeated across patch_dim)
+    mask_expanded = mask.unsqueeze(-1).float()  # (B, N, 1)
+
+    # Composite: masked patches ← prediction, unmasked ← original
+    composite_patches = (1 - mask_expanded) * patches + mask_expanded * pred
+
+    return model.unpatchify(composite_patches)
+
+
 def _create_masked_image(imgs: Tensor, mask: Tensor, patch_size: int) -> Tensor:
     """Create a visualisation of the masked input.
 
@@ -133,23 +163,25 @@ def plot_masking_examples(
 
     model.eval()
     with torch.no_grad():
-        _loss, _pred, mask = model(imgs)
+        _loss, pred, mask = model(imgs)
 
+    recon = model.unpatchify(pred).cpu()
     masked = _create_masked_image(imgs.cpu(), mask.cpu(), model.patch_size)
 
-    fig, axes = plt.subplots(2, actual_samples, figsize=(2 * actual_samples, 4))
+    fig, axes = plt.subplots(3, actual_samples, figsize=(2 * actual_samples, 6))
     if actual_samples == 1:
-        axes = axes.reshape(2, 1)
-    for i in range(actual_samples):
-        axes[0, i].imshow(imgs[i, 0].cpu().numpy(), cmap="gray")
-        axes[0, i].axis("off")
-        if i == 0:
-            axes[0, i].set_title("Original")
+        axes = axes.reshape(3, 1)
 
-        axes[1, i].imshow(masked[i, 0].numpy(), cmap="gray")
-        axes[1, i].axis("off")
-        if i == 0:
-            axes[1, i].set_title("Masked")
+    titles = ["Original", "Masked", "Reconstructed"]
+    for i in range(actual_samples):
+        row_input = imgs[i, 0].cpu().numpy()
+        vmin, vmax = row_input.min(), row_input.max()
+        for row, tensor in enumerate([imgs.cpu(), masked, recon]):
+            ax = axes[row, i]
+            ax.imshow(tensor[i, 0].numpy(), cmap="gray", vmin=vmin, vmax=vmax)
+            ax.axis("off")
+            if i == 0:
+                ax.set_title(titles[row])
 
     plt.tight_layout()
     save_figure(fig, save_path)
