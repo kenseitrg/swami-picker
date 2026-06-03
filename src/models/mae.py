@@ -435,3 +435,26 @@ class MaskedAutoencoder(nn.Module):
         pred = self.forward_decoder(latent, ids_restore)
         loss = self.forward_loss(imgs, pred, mask)
         return loss, pred, mask
+
+    def extract_embeddings(self, imgs: Tensor) -> Tensor:
+        """Extract mean-pooled encoder embeddings without masking.
+
+        Runs the full patch embedding + positional embedding + encoder
+        stack on *all* patches (no masking) and returns the mean across
+        the patch dimension.
+
+        Args:
+            imgs: Input images of shape ``(B, C, H, W)``.
+
+        Returns:
+            Embedding tensor of shape ``(B, embed_dim)``.
+        """
+        x = self.patchify(imgs)  # (B, N, patch_dim)
+        x = self.patch_embed(x)  # (B, N, embed_dim)
+        x = x + self.pos_embed  # (B, N, embed_dim)
+
+        for block in self.encoder_blocks:
+            x = block(x)
+        x = self.encoder_norm(x)  # (B, N, embed_dim)
+
+        return x.mean(dim=1)  # (B, embed_dim)

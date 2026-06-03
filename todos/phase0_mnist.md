@@ -92,11 +92,11 @@ for epoch in epochs:
 
 All figures must use `src/utils/plot_style.py`, be reproducible (seeded sampling), and saved as high-DPI PNG or vector graphics to the experiment run directory.
 
-- [ ] **Reconstruction grid** (epoch 3 & 5): input / masked / reconstructed side-by-side; before/after panels demonstrating the masking transformation clearly
-- [ ] **UMAP/t-SNE** of encoder outputs on test set, colored by digit label; demonstrate 10 visually distinct clusters without supervision
-- [ ] **Loss & LR curves**: training and validation loss, learning rate schedule, and VRAM usage over epochs on a single multi-panel figure
-- [ ] **Masking visual examples**: show block masking (2×2) applied to a sample batch to make the masking strategy unambiguous
-- [ ] Log Silhouette score (approximate) as sanity metric; include it as an annotation on the embedding plot
+- [x] **Reconstruction grid** (epoch 3 & 5): input / masked / reconstructed side-by-side; before/after panels demonstrating the masking transformation clearly
+- [x] **UMAP/t-SNE** of encoder outputs on test set, colored by digit label; demonstrate 10 visually distinct clusters without supervision
+- [x] **Loss & LR curves**: training and validation loss, learning rate schedule, and VRAM usage over epochs on a single multi-panel figure
+- [x] **Masking visual examples**: show block masking (2×2) applied to a sample batch to make the masking strategy unambiguous
+- [x] Log Silhouette score (approximate) as sanity metric; include it as an annotation on the embedding plot
 
 ---
 

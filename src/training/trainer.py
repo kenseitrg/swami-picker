@@ -17,7 +17,9 @@ from torch.utils.data import DataLoader
 from src.training.scheduler import get_cosine_schedule_with_warmup
 from src.utils.checkpoint import load_checkpoint, save_checkpoint
 
+
 if TYPE_CHECKING:
+    from src.models.mae import MaskedAutoencoder
     from src.utils.config import MNISTConfig
 
 logger = logging.getLogger(__name__)
@@ -54,7 +56,7 @@ class MAETrainer:
 
     def __init__(
         self,
-        model: nn.Module,
+        model: MaskedAutoencoder,
         config: MNISTConfig,
         device: torch.device,
         train_loader: DataLoader,
@@ -137,7 +139,7 @@ class MAETrainer:
             min_lr_ratio=0.1,
         )
 
-    def _autocast_context(self):
+    def _autocast_context(self) -> Any:
         """Return an autocast context manager if on CUDA, else a no-op."""
         if self.device.type == "cuda":
             return torch.amp.autocast("cuda", dtype=torch.float16)
@@ -194,6 +196,10 @@ class MAETrainer:
 
             if self.device.type == "cuda":
                 torch.cuda.reset_peak_memory_stats(self.device)
+
+            self._run_visualization(epoch)
+
+        self._plot_final_curves()
 
         logger.info(
             "Training complete. Best val_loss=%.6f",
@@ -300,6 +306,10 @@ class MAETrainer:
             total_loss += loss.item()
             num_batches += 1
 
+        if num_batches == 0:
+            logger.warning("Validation loader is empty; returning NaN loss.")
+            return {"val_loss": float("nan")}
+
         avg_loss = total_loss / num_batches
 
         return {
@@ -364,4 +374,73 @@ class MAETrainer:
             "Resumed from epoch %d, step %d",
             self.start_epoch,
             self.global_step,
+        )
+
+    def _run_visualization(self, epoch: int) -> None:
+        """Generate figures at target epochs.
+
+        Args:
+            epoch: 0-based epoch index.
+        """
+        # 0-based indices 2 and 4 correspond to 1-based epochs 3 and 5
+        plot_epochs = {2, 4}
+        is_first = epoch == self.start_epoch
+        is_target = epoch in plot_epochs
+        is_final = epoch == self.config.epochs - 1
+
+        if not (is_first or is_target or is_final):
+            return
+
+        # Guard against empty validation loader
+        try:
+            sample_images = next(iter(self.val_loader))[0]
+        except StopIteration:
+            logger.warning("Validation loader is empty; skipping visualization.")
+            return
+
+        # Lazy import to avoid heavy deps at module load time
+        from src.evaluation.visualize import (
+            plot_masking_examples,
+            plot_reconstruction_grid,
+            plot_umap_embeddings,
+        )
+
+        plot_dir = self.run_dir / "plots"
+        plot_dir.mkdir(parents=True, exist_ok=True)
+
+        if is_first:
+            plot_masking_examples(
+                self.model,
+                sample_images,
+                self.device,
+                plot_dir / "masking_examples.png",
+            )
+
+        if is_target or is_final:
+            plot_reconstruction_grid(
+                self.model,
+                sample_images,
+                self.device,
+                plot_dir / f"reconstruction_epoch_{epoch + 1:03d}.png",
+                seed=self.config.seed,
+            )
+            sil_score = plot_umap_embeddings(
+                self.model,
+                self.val_loader,
+                self.device,
+                plot_dir / f"umap_epoch_{epoch + 1:03d}.png",
+                seed=self.config.seed,
+            )
+            if sil_score is not None:
+                logger.info("Epoch %d | Silhouette score: %.3f", epoch + 1, sil_score)
+
+    def _plot_final_curves(self) -> None:
+        """Plot loss/LR/VRAM curves from the accumulated metrics file."""
+        from src.evaluation.visualize import plot_loss_curves
+
+        plot_dir = self.run_dir / "plots"
+        plot_dir.mkdir(parents=True, exist_ok=True)
+        plot_loss_curves(
+            self.metrics_logger.path,
+            plot_dir / "loss_curves.png",
         )
