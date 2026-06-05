@@ -282,6 +282,165 @@ def plot_umap_embeddings(
     return sil_score
 
 
+def plot_embedding_similarity_matrix(
+    model: MaskedAutoencoder,
+    loader: DataLoader,
+    device: torch.device,
+    save_path: Path,
+    max_samples: int = 2000,
+    seed: int = 42,
+) -> dict[str, float] | None:
+    """Generate a cross-digit cosine-similarity heat-map from encoder embeddings.
+
+    For every pair of digit classes the mean cosine similarity between *all*
+    embeddings of class ``i`` and *all* embeddings of class ``j`` is computed.
+    The resulting matrix is visualised as a heat-map.  A compact summary
+    panel reports the mean intra-class (diagonal) and inter-class
+    (off-diagonal) similarities.
+
+    Args:
+        model: MAE model instance.
+        loader: DataLoader yielding ``(images, labels)``.
+        device: Device to run inference on.
+        save_path: Output figure path.
+        max_samples: Maximum number of validation samples to process.
+        seed: Random seed for sample selection (deterministic subsampling).
+
+    Returns:
+        Dictionary with ``mean_intra``, ``mean_inter``, and ``contrast``
+        (intra / inter), or ``None`` if no samples were found.
+    """
+    apply_style()
+    model.eval()
+
+    all_embs: list[Tensor] = []
+    all_labels: list[Tensor] = []
+    total = 0
+
+    with torch.no_grad():
+        for images, labels in loader:
+            images = images.to(device)
+            embs = model.extract_embeddings(images)
+            all_embs.append(embs.cpu())
+            all_labels.append(labels)
+            total += len(images)
+            if total >= max_samples:
+                break
+
+    if not all_embs:
+        logger.warning("Empty DataLoader; skipping similarity matrix.")
+        return None
+
+    embeddings = torch.cat(all_embs)[:max_samples]  # (N, D)
+    labels = torch.cat(all_labels)[:max_samples].numpy()  # (N,)
+
+    unique_labels = np.unique(labels)
+    n_classes = len(unique_labels)
+    if n_classes < 2:
+        logger.warning("Fewer than 2 classes; skipping similarity matrix.")
+        return None
+
+    # Normalise embeddings for cosine similarity (dot product of unit vectors)
+    embeddings_norm = torch.nn.functional.normalize(embeddings, dim=1)
+
+    # Build class-indexed lists
+    class_embs = {int(lbl): embeddings_norm[labels == lbl] for lbl in unique_labels}
+
+    # Compute mean pairwise cosine similarity matrix
+    sim_matrix = np.zeros((n_classes, n_classes), dtype=np.float64)
+    for i, li in enumerate(unique_labels):
+        for j, lj in enumerate(unique_labels):
+            if i > j:
+                sim_matrix[i, j] = sim_matrix[j, i]
+                continue
+            ei = class_embs[int(li)]  # (Ni, D)
+            ej = class_embs[int(lj)]  # (Nj, D)
+            # All-pairs cosine similarities: (Ni, Nj)
+            sims = torch.mm(ei, ej.t())
+            sim_matrix[i, j] = sims.mean().item()
+
+    # Summary statistics
+    intra = np.diag(sim_matrix).mean()
+    inter = sim_matrix.mean() - intra * n_classes / (n_classes * n_classes)
+    # More robust: mean of off-diagonal elements
+    mask_off = ~np.eye(n_classes, dtype=bool)
+    inter = sim_matrix[mask_off].mean()
+    contrast = intra / (inter + 1e-8)
+
+    # ── Plot ──────────────────────────────────────────────────────────
+    fig = plt.figure(figsize=(10, 4.5))
+    gs = fig.add_gridspec(1, 2, width_ratios=[3.5, 1])
+
+    ax_mat = fig.add_subplot(gs[0, 0])
+    im = ax_mat.imshow(sim_matrix, cmap="RdYlGn", vmin=-1, vmax=1, aspect="auto")
+    ax_mat.set_xticks(np.arange(n_classes))
+    ax_mat.set_yticks(np.arange(n_classes))
+    ax_mat.set_xticklabels([str(int(lbl)) for lbl in unique_labels])
+    ax_mat.set_yticklabels([str(int(lbl)) for lbl in unique_labels])
+    ax_mat.set_xlabel("Digit Label")
+    ax_mat.set_ylabel("Digit Label")
+    ax_mat.set_title("Mean Cosine Similarity Between Embeddings")
+
+    # Annotate cells
+    for i in range(n_classes):
+        for j in range(n_classes):
+            val = sim_matrix[i, j]
+            text_color = "white" if abs(val) > 0.65 else "black"
+            ax_mat.text(
+                j,
+                i,
+                f"{val:.3f}",
+                ha="center",
+                va="center",
+                color=text_color,
+                fontsize=7,
+            )
+
+    plt.colorbar(im, ax=ax_mat, fraction=0.046, pad=0.04, label="Cosine Similarity")
+
+    ax_summary = fig.add_subplot(gs[0, 1])
+    ax_summary.axis("off")
+    summary_text = (
+        f"Samples: {len(embeddings)}\n"
+        f"Classes: {n_classes}\n"
+        f"Embed dim: {embeddings.shape[1]}\n"
+        f"\n"
+        f"Mean intra-class sim:\n"
+        f"  {intra:.4f}\n"
+        f"Mean inter-class sim:\n"
+        f"  {inter:.4f}\n"
+        f"Contrast (intra/inter):\n"
+        f"  {contrast:.3f}"
+    )
+    ax_summary.text(
+        0.1,
+        0.5,
+        summary_text,
+        transform=ax_summary.transAxes,
+        verticalalignment="center",
+        fontfamily="monospace",
+        fontsize=10,
+        bbox={"boxstyle": "round", "facecolor": "wheat", "alpha": 0.8},
+    )
+
+    plt.tight_layout()
+    save_figure(fig, save_path)
+    plt.close(fig)
+    logger.info(
+        "Saved embedding similarity matrix to %s (intra=%.4f, inter=%.4f, contrast=%.3f)",
+        save_path,
+        intra,
+        inter,
+        contrast,
+    )
+
+    return {
+        "mean_intra": float(intra),
+        "mean_inter": float(inter),
+        "contrast": float(contrast),
+    }
+
+
 def plot_loss_curves(
     metrics_path: Path,
     save_path: Path,

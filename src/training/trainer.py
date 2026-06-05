@@ -400,6 +400,7 @@ class MAETrainer:
 
         # Lazy import to avoid heavy deps at module load time
         from src.evaluation.visualize import (
+            plot_embedding_similarity_matrix,
             plot_masking_examples,
             plot_reconstruction_grid,
             plot_umap_embeddings,
@@ -433,6 +434,22 @@ class MAETrainer:
             )
             if sil_score is not None:
                 logger.info("Epoch %d | Silhouette score: %.3f", epoch + 1, sil_score)
+
+            sim_metrics = plot_embedding_similarity_matrix(
+                self.model,
+                self.val_loader,
+                self.device,
+                plot_dir / f"similarity_matrix_epoch_{epoch + 1:03d}.png",
+                seed=self.config.seed,
+            )
+            if sim_metrics is not None:
+                logger.info(
+                    "Epoch %d | Similarity: intra=%.4f, inter=%.4f, contrast=%.3f",
+                    epoch + 1,
+                    sim_metrics["mean_intra"],
+                    sim_metrics["mean_inter"],
+                    sim_metrics["contrast"],
+                )
 
     def _plot_final_curves(self) -> None:
         """Plot loss/LR/VRAM curves from the accumulated metrics file."""
