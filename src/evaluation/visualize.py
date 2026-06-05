@@ -5,6 +5,7 @@ import logging
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
+import matplotlib.patches as mpatches
 import matplotlib.pyplot as plt
 import numpy as np
 import torch
@@ -58,6 +59,62 @@ def _composite_reconstruction(
     return model.unpatchify(composite_patches)
 
 
+def _add_unmasked_outlines(
+    ax, mask_2d: np.ndarray, patch_size: int, color: str = "red", linewidth: float = 1.0
+) -> None:
+    """Draw thin outlines around contiguous unmasked (original) patch blocks.
+
+    Merges adjacent unmasked cells into a single bounding rectangle so
+    that e.g. a 2×2 block of unmasked patches gets one outline instead
+    of four.
+
+    Args:
+        ax: Matplotlib Axes to draw on.
+        mask_2d: 2-D boolean/binary mask of shape ``(n, n)`` where
+            ``0`` = unmasked (original) patch.
+        patch_size: Size of each square patch in pixels.
+        color: Outline color.
+        linewidth: Width of the outline in points.
+    """
+    n_h, n_w = mask_2d.shape
+    visited = np.zeros((n_h, n_w), dtype=bool)
+
+    for i in range(n_h):
+        for j in range(n_w):
+            if mask_2d[i, j] != 0 or visited[i, j]:
+                continue
+
+            # Expand right to find maximal width for this row segment
+            width = 0
+            for k in range(j, n_w):
+                if mask_2d[i, k] == 0 and not visited[i, k]:
+                    width += 1
+                else:
+                    break
+
+            # Expand down while the full width row is unmasked
+            height = 0
+            for k in range(i, n_h):
+                if np.all(mask_2d[k, j : j + width] == 0) and not np.any(
+                    visited[k, j : j + width]
+                ):
+                    height += 1
+                else:
+                    break
+
+            visited[i : i + height, j : j + width] = True
+
+            rect = mpatches.Rectangle(
+                (j * patch_size, i * patch_size),
+                width * patch_size,
+                height * patch_size,
+                fill=False,
+                edgecolor=color,
+                linewidth=linewidth,
+            )
+            ax.add_patch(rect)
+
+
 def _create_masked_image(imgs: Tensor, mask: Tensor, patch_size: int) -> Tensor:
     """Create a visualisation of the masked input.
 
@@ -94,8 +151,9 @@ def plot_reconstruction_grid(
 ) -> None:
     """Generate a side-by-side reconstruction grid.
 
-    Shows input, masked input, and reconstructed output for a random
-    subset of the provided images.
+    Shows input, masked input, and composite reconstruction (original
+    pixels in unmasked patches + predicted pixels in masked patches)
+    for a random subset of the provided images.
 
     Args:
         model: MAE model instance.
@@ -115,14 +173,16 @@ def plot_reconstruction_grid(
     with torch.no_grad():
         loss, pred, mask = model(imgs)
 
-    recon = model.unpatchify(pred).cpu()
+    recon = _composite_reconstruction(imgs, pred, mask, model).cpu()
     masked = _create_masked_image(imgs.cpu(), mask.cpu(), model.patch_size)
+    mask_np = mask.cpu().numpy()
+    n_patches_side = int(np.sqrt(mask_np.shape[1]))
 
     fig, axes = plt.subplots(actual_samples, 3, figsize=(6, 2 * actual_samples))
     if actual_samples == 1:
         axes = axes.reshape(1, -1)
 
-    titles = ["Input", "Masked", "Reconstructed"]
+    titles = ["Input", "Masked", "Composite"]
     for row in range(actual_samples):
         # Shared vmin/vmax per row based on the original input
         row_input = imgs[row, 0].cpu().numpy()
@@ -134,6 +194,10 @@ def plot_reconstruction_grid(
             ax.axis("off")
             if row == 0:
                 ax.set_title(titles[col])
+            # Add red outlines around original patches in the composite column
+            if col == 2:
+                mask_2d = mask_np[row].reshape(n_patches_side, n_patches_side)
+                _add_unmasked_outlines(ax, mask_2d, model.patch_size)
 
     plt.tight_layout()
     save_figure(fig, save_path)
@@ -148,7 +212,7 @@ def plot_masking_examples(
     save_path: Path,
     num_samples: int = 4,
 ) -> None:
-    """Visualise block masking applied to a sample batch.
+    """Visualise block masking and composite reconstruction on a sample batch.
 
     Args:
         model: MAE model instance.
@@ -165,14 +229,16 @@ def plot_masking_examples(
     with torch.no_grad():
         _loss, pred, mask = model(imgs)
 
-    recon = model.unpatchify(pred).cpu()
+    recon = _composite_reconstruction(imgs, pred, mask, model).cpu()
     masked = _create_masked_image(imgs.cpu(), mask.cpu(), model.patch_size)
+    mask_np = mask.cpu().numpy()
+    n_patches_side = int(np.sqrt(mask_np.shape[1]))
 
     fig, axes = plt.subplots(3, actual_samples, figsize=(2 * actual_samples, 6))
     if actual_samples == 1:
         axes = axes.reshape(3, 1)
 
-    titles = ["Original", "Masked", "Reconstructed"]
+    titles = ["Original", "Masked", "Composite"]
     for i in range(actual_samples):
         row_input = imgs[i, 0].cpu().numpy()
         vmin, vmax = row_input.min(), row_input.max()
@@ -182,6 +248,10 @@ def plot_masking_examples(
             ax.axis("off")
             if i == 0:
                 ax.set_title(titles[row])
+            # Add red outlines around original patches in the composite row
+            if row == 2:
+                mask_2d = mask_np[i].reshape(n_patches_side, n_patches_side)
+                _add_unmasked_outlines(ax, mask_2d, model.patch_size)
 
     plt.tight_layout()
     save_figure(fig, save_path)
