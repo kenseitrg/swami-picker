@@ -1,0 +1,46 @@
+# Phase 0 MNIST Smoke Test — CvT-MAE variant
+# Uses convolutional projection attention (CvT) in the encoder.
+
+# Data
+image_size: 256
+patch_size: 16
+in_channels: 1
+
+# Masking
+mask_ratio: 0.75
+use_block_masking: true
+block_size: 2
+
+# Model
+embed_dim: 384
+depth: 12
+num_heads: 6
+mlp_ratio: 4.0
+decoder_embed_dim: 256
+decoder_depth: 4
+decoder_num_heads: 8
+
+# CvT-specific
+use_cvt: true
+cvt_kernel_size: 3
+use_pos_embed: true
+
+# Training
+batch_size: 8
+accum_steps: 4
+epochs: 5
+lr: 1.0e-4
+weight_decay: 0.05
+betas: [0.9, 0.95]
+warmup_ratio: 0.1
+grad_clip_norm: 1.0
+
+# Reproducibility
+seed: 42
+
+# System
+num_workers: 0
+pin_memory: true
+
+# Logging
+log_interval: 50

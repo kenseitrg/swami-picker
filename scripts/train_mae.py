@@ -14,6 +14,7 @@ import torch
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from src.data.mnist_dataset import create_mnist_dataloaders
+from src.models.cvt_mae import CvTMaskedAutoencoder
 from src.models.mae import MaskedAutoencoder
 from src.training.trainer import MAETrainer
 from src.utils.config import MNISTConfig
@@ -156,21 +157,46 @@ def main() -> None:
     # ------------------------------------------------------------------
     # Model
     # ------------------------------------------------------------------
-    model = MaskedAutoencoder(
-        img_size=config.image_size,
-        patch_size=config.patch_size,
-        in_channels=config.in_channels,
-        embed_dim=config.embed_dim,
-        depth=config.depth,
-        num_heads=config.num_heads,
-        mlp_ratio=config.mlp_ratio,
-        decoder_embed_dim=config.decoder_embed_dim,
-        decoder_depth=config.decoder_depth,
-        decoder_num_heads=config.decoder_num_heads,
-        mask_ratio=config.mask_ratio,
-        use_block_masking=config.use_block_masking,
-        block_size=config.block_size,
-    )
+    if config.use_cvt:
+        model = CvTMaskedAutoencoder(
+            img_size=config.image_size,
+            patch_size=config.patch_size,
+            in_channels=config.in_channels,
+            embed_dim=config.embed_dim,
+            depth=config.depth,
+            num_heads=config.num_heads,
+            mlp_ratio=config.mlp_ratio,
+            decoder_embed_dim=config.decoder_embed_dim,
+            decoder_depth=config.decoder_depth,
+            decoder_num_heads=config.decoder_num_heads,
+            mask_ratio=config.mask_ratio,
+            use_block_masking=config.use_block_masking,
+            block_size=config.block_size,
+            cvt_kernel_size=config.cvt_kernel_size,
+            use_pos_embed=config.use_pos_embed,
+        )
+        logger.info(
+            "Architecture: CvT-MAE (kernel_size=%d, pos_embed=%s)",
+            config.cvt_kernel_size,
+            config.use_pos_embed,
+        )
+    else:
+        model = MaskedAutoencoder(
+            img_size=config.image_size,
+            patch_size=config.patch_size,
+            in_channels=config.in_channels,
+            embed_dim=config.embed_dim,
+            depth=config.depth,
+            num_heads=config.num_heads,
+            mlp_ratio=config.mlp_ratio,
+            decoder_embed_dim=config.decoder_embed_dim,
+            decoder_depth=config.decoder_depth,
+            decoder_num_heads=config.decoder_num_heads,
+            mask_ratio=config.mask_ratio,
+            use_block_masking=config.use_block_masking,
+            block_size=config.block_size,
+        )
+        logger.info("Architecture: ViT-MAE")
 
     n_params = sum(p.numel() for p in model.parameters())
     n_trainable = sum(p.numel() for p in model.parameters() if p.requires_grad)

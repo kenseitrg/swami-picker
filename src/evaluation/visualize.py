@@ -17,7 +17,10 @@ from src.utils.plot_style import apply_style, save_figure
 if TYPE_CHECKING:
     from torch import Tensor
 
+    from src.models.cvt_mae import CvTMaskedAutoencoder
     from src.models.mae import MaskedAutoencoder
+
+    MAEType = MaskedAutoencoder | CvTMaskedAutoencoder
 
 try:
     import umap
@@ -30,7 +33,7 @@ logger = logging.getLogger(__name__)
 
 
 def _composite_reconstruction(
-    imgs: Tensor, pred: Tensor, mask: Tensor, model: MaskedAutoencoder
+    imgs: Tensor, pred: Tensor, mask: Tensor, model: MAEType
 ) -> Tensor:
     """Build a composite image replacing only masked patches with predictions.
 
@@ -142,7 +145,7 @@ def _create_masked_image(imgs: Tensor, mask: Tensor, patch_size: int) -> Tensor:
 
 
 def plot_reconstruction_grid(
-    model: MaskedAutoencoder,
+    model: MAEType,
     images: Tensor,
     device: torch.device,
     save_path: Path,
@@ -206,7 +209,7 @@ def plot_reconstruction_grid(
 
 
 def plot_masking_examples(
-    model: MaskedAutoencoder,
+    model: MAEType,
     images: Tensor,
     device: torch.device,
     save_path: Path,
@@ -260,7 +263,7 @@ def plot_masking_examples(
 
 
 def plot_umap_embeddings(
-    model: MaskedAutoencoder,
+    model: MAEType,
     loader: DataLoader,
     device: torch.device,
     save_path: Path,
@@ -353,7 +356,7 @@ def plot_umap_embeddings(
 
 
 def plot_embedding_similarity_matrix(
-    model: MaskedAutoencoder,
+    model: MAEType,
     loader: DataLoader,
     device: torch.device,
     save_path: Path,

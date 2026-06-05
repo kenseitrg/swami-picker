@@ -34,6 +34,9 @@ class MNISTConfig:
     decoder_embed_dim: int = 256
     decoder_depth: int = 4
     decoder_num_heads: int = 8
+    use_cvt: bool = False
+    cvt_kernel_size: int = 3
+    use_pos_embed: bool = True
 
     # Training
     batch_size: int = 8
