@@ -30,6 +30,7 @@
 | **Training Stability** | Loss curve monotonic decrease | low MSE by epoch 5, no NaN/Inf |
 | **Reconstruction Quality** | Visual side-by-side (input vs masked vs reconstructed) | Digits recognizable, edges sharp, no checkerboard artifacts |
 | **Embedding Structure** | UMAP/t-SNE of encoder outputs (colored by digit label) | 10 distinct clusters emerge without supervision |
+| **Embedding Separability** | Mean cosine-similarity contrast (intra-class / inter-class) | > 2.5 (required for downstream clustering) |
 | **VRAM Profile** | `torch.cuda.max_memory_allocated()` | < 4.5 GB (leaves headroom for FK data + augmentations) |
 | **Pipeline Integrity** | Checkpoint save/load + resume | Identical loss curve on resume |
 
@@ -40,10 +41,26 @@
 4. Log VRAM, throughput (samples/sec), and loss history
 5. ✅ **Proceed to Phase 1 only if all success criteria are met**
 
+### Architecture Exploration: CvT-MAE
+A Convolutional Vision Transformer (CvT) variant was implemented and evaluated as a potential encoder replacement. The CvT-MAE uses depth-wise convolutional projections for Q/K/V in self-attention and processes the **full token grid** (no token dropping during encoding), with masked patches replaced by a learnable mask token before the encoder.
+
+| Metric | ViT-MAE Baseline | CvT-MAE | Assessment |
+|--------|-----------------|---------|------------|
+| Best Val Loss | 0.271 | **0.198** | ✅ Better reconstruction |
+| Silhouette Score | **0.18** | 0.032 | ❌ Catastrophic collapse |
+| Intra/Inter Contrast | **3.70** | 1.07 | ❌ Embeddings not separable |
+| VRAM Peak | **777 MB** | 2047 MB | ❌ 2.6× overhead |
+| Throughput | ~60 s/s | ~73 s/s | ~ Parity |
+
+**Diagnosis:** The CvT encoder's depth-wise convolutions mix the learned mask token with neighboring visible patches, creating a "homogenizing" effect that destroys class-discriminative signal in the embeddings. The reconstruction objective improves, but the embedding space becomes nearly uniform (all digits have ~0.82 cosine similarity).
+
+**Decision:** ❌ **CvT-MAE is not viable for this pipeline.** Phase 3 prototype clustering and active learning depend on embeddings with high intra/inter contrast. The ViT-MAE baseline is retained as the architecture of record for Phase 1 FK pretraining.
+
 ⚠️ **Failure Triggers:** 
 - Loss NaN/Inf → check AMP scaling, LR warmup, or patch divisibility
 - VRAM > 5.5 GB → reduce patch size to 8 or disable gradient accumulation
 - No UMAP clusters → verify masking isn't hiding all signal, check cosine similarity head
+- **Embedding contrast < 2.0** → architecture is unsuitable for downstream clustering; revert to ViT-MAE
 
 ---
 
