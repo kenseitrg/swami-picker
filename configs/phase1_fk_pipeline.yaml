@@ -1,0 +1,19 @@
+# Phase 1: FK Spectrum Preprocessing Pipeline Configuration
+# See PROJECT_PLAN.md §Phase 1 for rationale.
+
+# Directories
+raw_data_dir: "data"
+output_dir: "data/processed"
+
+# Preprocessing
+normalization: "minmax"
+clip_bounds: [-3.0, 3.0]
+output_size: [256, 256]
+interpolation_mode: "bilinear"
+align_corners: false
+
+# Validation split (receiver lines held out for validation)
+val_lines: [5115, 5259]
+
+# Reproducibility
+random_seed: 42

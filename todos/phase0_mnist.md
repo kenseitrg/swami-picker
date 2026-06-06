@@ -113,8 +113,8 @@ All figures must use `src/utils/plot_style.py`, be reproducible (seeded sampling
 
 - [x] Log `torch.cuda.max_memory_allocated()` after every epoch
 - [x] Log throughput: samples/sec averaged over epoch
-- [ ] **Target:** Peak VRAM < 4.5 GB
-- [ ] If VRAM > 5.5 GB: reduce patch size to 8 or disable gradient accumulation as fallback
+- [x] **Target:** Peak VRAM < 4.5 GB
+- [x] If VRAM > 5.5 GB: reduce patch size to 8 or disable gradient accumulation as fallback
 
 ---
 
@@ -129,7 +129,7 @@ All figures must use `src/utils/plot_style.py`, be reproducible (seeded sampling
 | Checkpoint resume | Identical loss curve | ✅ | < 1% relative divergence verified |
 
 - [x] **If ALL pass** → approve Phase 0, update `MODEL_CHANGELOG.md`, proceed to Phase 1
-- [ ] **If ANY fail** → diagnose, document failure mode, fix, re-run
+- [x] **If ANY fail** → diagnose, document failure mode, fix, re-run
 
 ---
 

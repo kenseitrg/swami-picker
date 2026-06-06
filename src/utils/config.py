@@ -1,10 +1,89 @@
 from __future__ import annotations
 
-from dataclasses import asdict, dataclass
+from dataclasses import asdict, dataclass, field
 from pathlib import Path
 from typing import Any
 
 import yaml
+
+
+@dataclass
+class FKPipelineConfig:
+    """Configuration for the Phase 1 FK spectrum preprocessing pipeline.
+
+    All parameters that affect the preprocessed output are captured here
+    so that the preprocessing step is fully reproducible.
+    """
+
+    # Directories
+    raw_data_dir: str = "data"
+    output_dir: str = "data/processed"
+
+    # Preprocessing
+    normalization: str = "minmax"  # "minmax" or "zscore"
+    clip_bounds: tuple[float, float] = (-3.0, 3.0)
+    output_size: tuple[int, int] = (256, 256)
+    interpolation_mode: str = "bilinear"
+    align_corners: bool = False
+
+    # Splits
+    val_lines: list[int] = field(default_factory=list)
+
+    # Reproducibility
+    random_seed: int = 42
+
+    def to_dict(self) -> dict[str, Any]:
+        """Serialize config to a plain dictionary."""
+        return {
+            k: str(v) if isinstance(v, Path) else v for k, v in asdict(self).items()
+        }
+
+    @classmethod
+    def from_yaml(cls, path: Path) -> FKPipelineConfig:
+        """Load configuration from a YAML file.
+
+        Args:
+            path: Path to the YAML config file.
+
+        Returns:
+            A populated ``FKPipelineConfig`` instance.
+
+        Raises:
+            FileNotFoundError: If *path* does not exist.
+            TypeError: If the YAML contains unexpected keys.
+        """
+        if not path.exists():
+            raise FileNotFoundError(f"Config file not found: {path}")
+
+        with open(path) as fh:
+            raw: dict[str, Any] = yaml.safe_load(fh)
+
+        # YAML lists become Python lists; convert tuples back.
+        for key in ("clip_bounds", "output_size"):
+            if key in raw and isinstance(raw[key], list):
+                raw[key] = tuple(raw[key])
+
+        known = {f.name for f in cls.__dataclass_fields__.values()}
+        unknown = set(raw) - known
+        if unknown:
+            raise TypeError(f"Unexpected config keys: {unknown}")
+
+        return cls(**raw)
+
+    def save_yaml(self, path: Path) -> None:
+        """Save configuration to a YAML file.
+
+        Args:
+            path: Destination file path.
+        """
+        path.parent.mkdir(parents=True, exist_ok=True)
+        with open(path, "w") as fh:
+            yaml.safe_dump(
+                self.to_dict(),
+                fh,
+                default_flow_style=False,
+                sort_keys=False,
+            )
 
 
 @dataclass
