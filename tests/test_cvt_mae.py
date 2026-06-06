@@ -133,11 +133,15 @@ class TestCvTMaskedAutoencoderForward:
         reconstructed = model.unpatchify(patches)
         assert torch.allclose(dummy, reconstructed, atol=1e-6)
 
-    def test_block_masking_invariant(self, small_cvt_model: CvTMaskedAutoencoder) -> None:
+    def test_block_masking_invariant(
+        self, small_cvt_model: CvTMaskedAutoencoder
+    ) -> None:
         """mask + (ids_restore < N_keep) == 1 for every position."""
         model = small_cvt_model
         B, N = 8, model.num_patches
-        ids_keep, mask, ids_restore = model._generate_block_mask(B, N, torch.device("cpu"))
+        ids_keep, mask, ids_restore = model._generate_block_mask(
+            B, N, torch.device("cpu")
+        )
         N_keep = ids_keep.shape[1]
         kept_flags = (ids_restore < N_keep).float()
         invariant = mask + kept_flags

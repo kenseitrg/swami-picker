@@ -105,8 +105,8 @@ metadata = {
 
 ## 🧠 Phase 2: MAE Pretraining (Unsupervised)
 ### Architecture
-- **Encoder**: ViT-Small or medium (`patch_size=16`, `embed_dim=384`, `depth=12`) or ResNet-18 fallback
-- **Decoder**: Lightweight MLP or 2-layer ConvNet (reconstructs only masked patches)
+- **Encoder**: ViT-Small or medium (`patch_size=16`, `embed_dim=384`, `depth=12`)
+- **Decoder**: Lightweight structure to ensure that encoder embeddings are meaningfull
 - **Masking**: 70–75% ratio, **block masking** (2×2 patch groups) preferred over random
 
 ### Training Configuration
