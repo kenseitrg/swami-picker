@@ -66,17 +66,21 @@ A Convolutional Vision Transformer (CvT) variant was implemented and evaluated a
 
 ## 📦 Phase 1: FK Data Pipeline & Preprocessing
 ### Input Format
-- 2D FK spectra: `[Batch, 1, Freq_Bins, Wavenumber_Bins]` (single-channel)
+- 2D FK spectra: `[Batch, 1, Wavenumber_Bins, Freq_Bins]` (single-channel)
+  - Axis 0 (vertical) = wavenumber, Axis 1 (horizontal) = frequency
+  - Tensor is transposed from the raw SEG-Y layout: (freq, waven) → (waven, freq)
+  - Frequency on the horizontal axis matches seismic processing convention
 - Target resolution: `256×256` (downsample/interpolate if necessary)
 
 ### Preprocessing Steps (With Metadata Tracking)
 ```python
 # Per-spectrum metadata dictionary (MUST be saved alongside processed tensor)
 metadata = {
-    "original_shape": (freq_orig, waven_orig),      # e.g., (512, 1024)
-    "freq_axis_original": freq_vals_original,        # Hz, linear 
+    "original_shape": (freq_orig, waven_orig),      # e.g., (262, 400) — raw SEG-Y order
+    "freq_axis_original": freq_vals_original,        # Hz, linear
     "waven_axis_original": waven_vals_original,      # 1/m
-    "resize_factors": (freq_scale, waven_scale),     # 256/freq_orig, 256/waven_orig
+    "resize_factors": (waven_scale, freq_scale),     # 256/waven_orig, 256/freq_orig
+    # Transposed before resize: tensor shape (waven, freq) → resize_factors[0] for wavenumber axis
     "amplitude_normalization": {"mu": x.mean(), "sigma": x.std()},
     "clipping_bounds": (-3, 3),
     "spectrum_id": "site_001_shot_042"
@@ -182,36 +186,41 @@ metadata = {
 ```python
 def model_to_original_coords(picks_model, metadata):
     """
-    picks_model: [(f_model_norm, k_model_norm), ...] in [0, 255] pixel indices
+    picks_model: [(k_model_idx, f_model_idx), ...] in [0, 255] pixel indices
     metadata: dict from Phase 1 preprocessing
     Returns: [(f_hz, k_inv_m), uncertainty_transformed, ...]
+
+    Note: The model operates on the transposed tensor (shape waven×freq),
+    so pick coordinates are [wavenumber_idx, freq_idx].
     """
     picks = np.array(picks_model)
-    
+
     # 1. Denormalize pixel indices to [0, 1] model-space coordinates
-    f_norm = picks[:, 0] / 255.0
-    k_norm = picks[:, 1] / 255.0
-    
+    k_norm = picks[:, 0] / 255.0  # wavenumber is axis 0 (vertical)
+    f_norm = picks[:, 1] / 255.0  # frequency is axis 1 (horizontal)
+
     # 2. Reverse resize scaling
-    f_resized = f_norm * metadata["original_shape"][0]
-    k_resized = k_norm * metadata["original_shape"][1]
-    
+    # Note: metadata["resize_factors"] = [waven_scale, freq_scale]
+    # (wavenumber maps to original axis 1, frequency maps to original axis 0)
+    k_resized = k_norm * metadata["original_shape"][1]  # inverse: 256/waven_orig → waven_orig
+    f_resized = f_norm * metadata["original_shape"][0]  # inverse: 256/freq_orig → freq_orig
+
     # 3. Reverse axis transformations
-    if metadata["freq_transform"] == "log10":
+    if metadata.get("freq_transform") == "log10":
         f_original = 10**f_resized - 1e-8  # reverse log10(f + eps)
     else:
         f_original = f_resized  # linear axis
-    
+
     k_original = k_resized  # wavenumber typically linear
-    
+
     # 4. Propagate uncertainty (first-order error propagation)
     if "uncertainty_model" in metadata:
-        unc_f = metadata["uncertainty_model"]["f_std"] * metadata["resize_factors"][0]
-        unc_k = metadata["uncertainty_model"]["k_std"] * metadata["resize_factors"][1]
-        if metadata["freq_transform"] == "log10":
-            unc_f = unc_f * np.log(10) * (10**f_resized)
-        return list(zip(f_original, k_original, unc_f, unc_k))
-    
+        unc_waven = metadata["uncertainty_model"]["k_std"] * metadata["resize_factors"][0]
+        unc_freq = metadata["uncertainty_model"]["f_std"] * metadata["resize_factors"][1]
+        if metadata.get("freq_transform") == "log10":
+            unc_freq = unc_freq * np.log(10) * (10**f_resized)
+        return list(zip(f_original, k_original, unc_freq, unc_waven))
+
     return list(zip(f_original, k_original))
 ```
 

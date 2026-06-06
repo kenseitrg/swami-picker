@@ -25,7 +25,7 @@ Transform raw SEG-Y FK spectra into a model-ready dataset with full metadata pro
 | **Train/val split** | Hold out **entire receiver lines** (~10% of lines) | Geophysical generalization matters more than IID balance. A model that has never seen spectra from RL5115 or RL5259 is a stronger validation signal. |
 | **Storage format** | Individual `.npz` tensor + `.json` sidecar per spectrum | PROJECT_RULES §4.1 mandates JSON sidecars. Inspectability outweighs I/O overhead for ~1,450 spectra. |
 | **Output resolution** | `256×256` bilinear | Matches Phase 0 MAE config exactly. Patch size `16×16` → 256 tokens. |
-| **Spectrum orientation** | `(freq, wavenumber)` → model input `(1, 256, 256)` | Frequency on vertical axis (slow dimension), wavenumber on horizontal axis (fast dimension). Consistent with trace sample ordering. |
+| **Spectrum orientation** | `(wavenumber, freq)` → model input `(1, 256, 256)` | Transposed from raw `(freq, wavenumber)`. Frequency on horizontal axis (fast dimension, x-axis in imshow), wavenumber on vertical axis (slow dimension, y-axis). Matches seismic processing display convention. |
 
 ---
 
@@ -90,15 +90,21 @@ Each `RawSpectrum` flows through a deterministic, ordered pipeline:
    - Optional: `zscore`: `(x - μ) / (σ + 1e-6)`
    - Store `norm_params` dict in metadata for inverse.
 
-2. **Resize to 256×256**
-   - Use `torch.nn.functional.interpolate` with `mode='bilinear', align_corners=False`.
-   - Store `resize_factors` (`256/262`, `256/400`) in metadata.
+2. **Axis transpose** (from raw SEG-Y to display convention)
+   - Raw SEG-Y layout: `(freq_bins, wavenumber_bins)` = `(262, 400)`
+   - Transpose to `(wavenumber_bins, freq_bins)` = `(400, 262)` so frequency is on the horizontal axis.
+   - This matches seismic processing convention (freq on x, wavenumber on y).
 
-3. **Dynamic range clipping**
+3. **Resize to 256×256**
+   - Use `torch.nn.functional.interpolate` with `mode='bilinear', align_corners=False`.
+   - Input shape `(400, 262)`, output shape `(256, 256)`.
+   - Store `resize_factors` (`256/400`, `256/262`) in metadata. These correspond to `[waven_scale, freq_scale]`.
+
+4. **Dynamic range clipping**
    - `np.clip(x, -3, 3)` after z-score; no-op for min-max (already bounded).
    - Store `clipping_bounds` in metadata.
 
-4. **Metadata assembly**
+5. **Metadata assembly**
    - Produce a JSON-serializable metadata dict containing all fields required by PROJECT_RULES §4.1 and §5.1.
 
 ### 2.2 PreprocessedSpectrum Dataclass
@@ -113,7 +119,7 @@ PreprocessedSpectrum:
 {
   "spectrum_id": "RL5007_50071009",
   "original_shape": [262, 400],
-  "resize_factors": [0.9771, 0.6400],
+  "resize_factors": [0.6400, 0.9771],  # [waven_scale, freq_scale] = [256/400, 256/262]
   "freq_axis_original": [0.0, 0.0610, ..., 15.9302],
   "waven_axis_original": [0.0, 0.0002, ..., 0.08],
   "freq_axis_resized": [0.0, ..., 15.9302],   // interpolated axis values
@@ -231,19 +237,19 @@ random_seed: 42
 | Reader correctness | IBM decoder accurate, headers parsed, spectra grouped | ✅ | 14 segy_reader tests pass |
 | Preprocessing correctness | Normalization, resize, clip, metadata all correct | ✅ | 19 preprocessing tests pass |
 | Dataset integration | `FKDataset` loads splits, returns `(1, 256, 256)` tensors | ✅ | 10 dataset tests pass |
-| Shape consistency | Every tensor is `(256, 256)` | ✅ | Smoke test + unit tests |
+| Shape consistency | Every tensor is `(256, 256)` | ✅ | Verified: sample `(256, 256)`, `float32` |
 | Metadata completeness | 100% of files contain all required keys | ✅ | `test_metadata_completeness` |
 | Train/val disjointness | Zero overlap | ✅ | `test_split_no_overlap` |
 | Coordinate axis validity | `freq_axis_original` monotonic, `waven_axis_original` linear | ✅ | `test_frequency_monotonic` + `test_wavenumber_axis_bounds` |
 | Code quality | ruff + ty clean | ✅ | `ruff check .` and `ty check` pass |
-| All spectra extracted | ~1,450 `.npz` + `.json` pairs | ⏳ | Pending full `python scripts/preprocess_fk.py` run (dry-run validated on 1 file) |
-| Visual sanity | Before/after panels show expected smoothing, no artifacts | ⏳ | Pending manual review after full run |
+| All spectra extracted | ~1,450 `.npz` + `.json` pairs | ✅ | **1,392 spectra** (1,272 train, 120 val) across 25 receiver lines |
+| Visual sanity | Before/after panels show expected smoothing, no artifacts | ✅ | Manual review: FK mode structures preserved, normalization range `[-0.98, 0.99]` |
 
 ---
 
 ## 8. Pending Decisions to Revisit
 
-- [ ] **Full pipeline run**: Run `python scripts/preprocess_fk.py` on all 26 files to generate the complete dataset (~1,450 spectra). Estimated time: ~5–10 minutes.
+- [x] **Full pipeline run**: Completed — 1,392 spectra across 25 receiver lines (9×48 + 16×60). Train=1,272, val=120 (lines 5115, 5259).
 - [ ] **Ablate normalization**: After Phase 2 smoke test, compare min-max vs. z-score on reconstruction loss.
-- [ ] **Val line selection**: Confirm `val_lines` cover diverse geography (not all from one area). Revisit after plotting receiver line map from X/Y coordinates.
+- [ ] **Val line selection**: Lines 5115 and 5259 are held out. Revisit geographically diverse coverage after plotting receiver line map from X/Y coordinates.
 - [ ] **Augmentation**: Random frequency/wavenumber shift, block masking, noise injection — defined in Phase 2 config, not Phase 1.

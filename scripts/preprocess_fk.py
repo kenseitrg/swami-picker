@@ -213,7 +213,7 @@ def _plot_before_after(
         im0 = ax0.imshow(
             raw.data.T,
             aspect="auto",
-            origin="lower",
+            origin="upper",
             extent=[
                 raw.freq_axis.min(),
                 raw.freq_axis.max(),
@@ -228,7 +228,7 @@ def _plot_before_after(
 
         # Resized
         ax1 = ax_row[1]
-        im1 = ax1.imshow(processed.tensor, aspect="auto", origin="lower")
+        im1 = ax1.imshow(processed.tensor, aspect="auto", origin="upper")
         ax1.set_title(f"Resized: {spectrum_id}")
         ax1.set_xlabel("Pixel (freq)")
         ax1.set_ylabel("Pixel (wavenumber)")

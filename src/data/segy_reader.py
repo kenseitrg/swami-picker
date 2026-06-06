@@ -181,7 +181,7 @@ def read_spectrum_raw(filepath: Union[Path, str]) -> dict[str, RawSpectrum]:
                 stations[station] = []
             stations[station].append(
                 {
-                    "trace": trace.astype(np.float32, copy=False),
+                    "trace": trace.astype(np.float32, copy=True),
                     "frequency": freq,
                     "elevation": float(hdr["elevation"]),
                     "x_coord": float(hdr["x_coord"]),

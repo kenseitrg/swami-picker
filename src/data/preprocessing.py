@@ -198,15 +198,21 @@ def preprocess_spectrum(
     # 1. Normalization
     data, norm_params = normalize_spectrum(data, config.normalization)
 
-    # 2. Resize
+    # 2. Transpose so frequency is the horizontal axis (x/columns)
+    #    Original: shape (freq_bins, wavenumber_bins)
+    #    After:    shape (wavenumber_bins, freq_bins)
+    data = data.T
+
+    # 3. Resize
     data, resize_factors = resize_spectrum(data, config.output_size)
 
-    # 3. Clipping
+    # 4. Clipping
     data, clipping_bounds = clip_spectrum(data, config.clip_bounds)
 
     # Axis interpolation for resized axes
-    freq_resized = _interpolate_axis(raw.freq_axis, config.output_size[0])
-    waven_resized = _interpolate_axis(raw.waven_axis, config.output_size[1])
+    # After transpose: axis 0 = wavenumber, axis 1 = frequency
+    waven_resized = _interpolate_axis(raw.waven_axis, config.output_size[0])
+    freq_resized = _interpolate_axis(raw.freq_axis, config.output_size[1])
 
     metadata: dict[str, Any] = {
         "spectrum_id": _spectrum_id(raw),
