@@ -103,7 +103,7 @@ def _plot_umap_clusters(
     if has_noise:
         unique_labels.remove(-1)
 
-    cmap = plt.cm.get_cmap("tab20", max(len(unique_labels), 1))
+    cmap = plt.colormaps["tab20"].resampled(max(len(unique_labels), 1))
 
     # Plot noise first so it sits behind clusters
     if has_noise:

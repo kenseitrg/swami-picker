@@ -133,45 +133,95 @@ too low for any self-supervised objective to extract distinguishing features.
 
 ---
 
-### Option C: Supervised Pretraining with Pseudo-Labels (RECOMMENDED)
+### Option C: Supervised Pretraining with Pseudo-Labels (IMPLEMENTED ✅)
 
-**Approach:** Skip self-supervised learning. Use weak supervision via clustering:
-1. Extract simple features from raw spectra (PCA 50-200 components, or spectral descriptors)
-2. Cluster with HDBSCAN to obtain pseudo-labels
-3. Train a supervised ViT classifier (cross-entropy) to predict pseudo-labels
-4. Use the classifier's penultimate layer as embeddings for Phase 3
+**Approach:** Skip self-supervised learning. Use weak supervision via **2-step hierarchical clustering** of engineered features:
+1. Extract physics-informed spectral descriptors (20 features per spectrum)
+2. **Step 1:** UMAP(5D, min_dist=0.0) → HDBSCAN to obtain initial pseudo-labels
+3. **Step 2:** Re-cluster the dominant cluster with the same pipeline to split it into sub-clusters
+4. Merge sub-clusters with the stable core → balanced 11-cluster label set
+5. Train a lightweight MLP classifier (cross-entropy) on the merged pseudo-labels
+6. Use the classifier's penultimate layer as embeddings for Phase 3
 
-**Why this should work where self-supervised failed:**
+**Why this works where self-supervised failed:**
 - Cross-entropy loss **explicitly forces the model to discriminate between clusters**
 - The model receives a direct "push different samples apart" signal
 - Even if pseudo-labels are noisy, the classifier must learn to separate them
-- This is the standard approach when unsupervised methods fail on homogeneous data
+- 2-step hierarchical clustering prevents a single dominant cluster from collapsing the label space
 
-#### Architecture
+#### Clustering Front-End
 ```
-Input ──► Encoder (ViT-Small) ──► Mean Pool ──► Classifier MLP ──► Logits
-                                    │
-                                    └──► Embedding (extracted for Phase 3)
+Raw spectrum (256×256)
+    │
+    ├──► Energy marginals (sum along each axis) → concatenate 512-D → PCA(10)
+    │     └── Optional Path A: 10 PCA components
+    │
+    └──► Spectral descriptors (20 physics-informed features)
+            └── Path B (winner): centroids, bandwidths, energy ratios,
+                 peak velocities, skewness, total energy
+                     │
+                     ▼
+              StandardScaler
+                     │
+                     ▼
+              UMAP(5D, n_neighbors=15, min_dist=0.0)
+                     │
+                     ▼
+              HDBSCAN(min_cluster_size=30, min_samples=10, eom)
+                     │
+                     ├──► Stable core (K-1 clusters)
+                     └──► Dominant cluster (if > 50% of data)
+                              │
+                              ▼
+                      Re-run UMAP → HDBSCAN
+                              │
+                              ▼
+                      Sub-clusters → merge
 ```
+
+**Winning feature set:** Physics-informed spectral descriptors (20-D), standardized.
+- Frequency/wavenumber centroids & bandwidths
+- Energy-weighted IQR
+- Low/High frequency energy ratio
+- Peak velocities at 10 frequency bands
+- Frequency/wavenumber skewness
+- Total energy
+
+#### Architecture for Stage-1 Classifier
+```
+Input (features: 20-D or raw: 1×256×256)
+    │
+    ├──► MLP(20→256→128→K)   [for feature input]
+    └──► CNN(→128→GAP→256→K) [for raw spectra]
+    │
+    └──► Penultimate layer → Embedding for Phase 3
+```
+
+#### Stage-2 Pseudo-Label Expansion
+After Stage-1 training, run inference on noise points (-1). Accept pseudo-labels where
+softmax confidence ≥ 0.90 and cluster size after addition ≥ 5. Retrain on expanded set.
 
 #### Configuration
 | Parameter | Value | Rationale |
 |-----------|-------|-----------|
-| Encoder | ViT-Small (same as Phase 0) | Reuse proven architecture |
-| Classifier | 2× MLP: 384 → 256 → K (num clusters) | Lightweight head |
+| Features | Spectral descriptors (20-D) | Best separation (Silhouette 0.60) |
+| Clustering | 2-step hierarchical UMAP→HDBSCAN | Splits dominant cluster |
+| Label set | 11 clusters, 12% noise | Balanced sizes (36–260) |
+| Classifier | MLP(20→256→128→K) | Fast, low VRAM, interpretable |
 | Loss | Cross-entropy | Explicit discrimination signal |
-| Batch size | 16 | Same as VICReg (proven to fit in VRAM) |
-| Optimizer | AdamW, LR=1e-4, cosine decay | Lower LR than VICReg (more stable for classification) |
-| Epochs | 30 (smoke test) → 100 (full) | Quick validation before committing |
+| Batch size | 32 | Features are tiny (20-D) |
+| Optimizer | AdamW(fused=True), LR=1e-4, cosine decay | Proven stable |
+| Epochs | 30 (smoke test) → 100 (full) | Quick validation |
 
 #### Success Criteria
 | Metric | Target | How to Verify |
 |--------|--------|---------------|
-| Training accuracy | > 60% (above random for K clusters) | Logged per epoch |
+| Training accuracy | > 60% (above random for 11 clusters) | Logged per epoch |
 | Validation accuracy | Within 10% of training accuracy | Check for overfitting |
-| Silhouette score | > 0.1 | Logged at visualization epochs |
+| Silhouette score (penultimate) | > 0.10 | Logged at visualization epochs |
 | Intra/inter contrast | > 1.5 | Similarity matrix plot |
 | VRAM | < 4.5 GB | `max_vram_mb` logged |
+| Pseudo-label purity | > 85% agreement (Stage 1 ↔ Stage 3) | Confusion matrix diagonal |
 
 ---
 

@@ -21,4 +21,6 @@ Every modification to model architecture, loss formulation, or data augmentation
 | 2026-06-07 | phase2-fk-mae-v3 | Aggressive aug (noise=0.15, jitter=0.50, freq/waven shift, band dropout), random masking 25%, 100 epochs planned (stopped at 54), min_lr=1e-6. | v2: val_loss=0.075, collapse | val_loss=0.095 (epoch 54), still collapsed | ❌ MAE fundamentally unsuitable for FK spectra |
 | 2026-06-07 | phase2-vicreg-v1 | VICReg self-supervised learning. ViT-Small encoder (no decoder) + projector MLP (2048-d). Loss: λ=25, µ=25, ν=1. Batch=16, LR=3e-4, 50 epochs. Same aggressive augmentations. | N/A | Silhouette=−0.252, contrast=1.036, loss=37.0 | ❌ Fuzzy-ball collapse — variance hinge still active after 50 epochs |
 
+| 2026-06-07 | phase2c-clustering-v1 | Option C clustering pipeline: spectral descriptors (20-D) → UMAP(5D, md=0.0) → HDBSCAN. Two-step hierarchical clustering: initial 5 clusters → re-cluster dominant cluster (940 spectra) → 11 merged clusters (12% noise). | N/A (first successful clustering) | Silhouette=0.60 (step 1), 0.46 (step 2), 11 clusters, noise=12% | ✅ First successful FK spectrum clustering — pseudo-labels ready for Stage-1 training |
+
 <!-- Append new entries above this line -->

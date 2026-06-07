@@ -810,7 +810,53 @@ After each stage completes, fill in metrics:
 
 ---
 
-### 16.9 Experiment Log (Reserved)
+### 16.9 Experiment Log
 
-<!-- Append Option C experiment results below this line -->
+#### Round 1: Feature Path Comparison (UMAP 5D → HDBSCAN default)
+
+| Experiment | Method | Clusters | Noise | Silhouette | Notes |
+|-----------|--------|:-------:|:-----:|:----------:|-------|
+| 2026-06-07 | **A** Marginals+PCA (umap5, md=0.1) | 10 | 47.7% | 0.35 | 10 well-balanced clusters but high noise |
+| 2026-06-07 | **B** Spectral Descriptors (umap5, md=0.1) | 5 | 0.0% | **0.51** | Clean separation, one giant cluster (68%) |
+| 2026-06-07 | **A** Marginals+PCA (umap10, md=0.1) | 10 | 56.2% | 0.42 | More dims → better Silhouette, worse noise |
+| 2026-06-07 | **B** Spectral Descriptors (umap10, md=0.1) | 5 | 1.9% | **0.54** | Robust structure, dominant cluster persists |
+
+#### Round 2: UMAP min_dist Ablation (Path B, UMAP 5D)
+
+| Experiment | min_dist | Clusters | Noise | Silhouette | Notes |
+|-----------|:-------:|:-------:|:-----:|:----------:|-------|
+| Baseline | 0.1 | 5 | 0% | 0.51 | Original clean split |
+| **Winner** | **0.0** | **5** | **0%** | **0.60** | **Tighter clusters, same structure** |
+
+#### Round 3: HDBSCAN Parameter Scan (Path B, UMAP 5D, md=0.1)
+
+| Experiment | min_size | min_samples | Method | Clusters | Noise | Silhouette |
+|-----------|:-------:|:-----------:|:------:|:-------:|:-----:|:----------:|
+| Baseline | 30 | 10 | eom | 5 | 0% | **0.51** |
+| Lower min_size | 20 | 10 | eom | 6 | 0% | 0.48 |
+| Lower min_size | 15 | 10 | eom | 11 | 1.1% | 0.16 |
+| Low min_samples | 15 | 5 | eom | 14 | 1.2% | 0.16 |
+| Leaf method | 30 | 10 | leaf | 5 | 0% | 0.51 |
+| Leaf method | 15 | 10 | leaf | 11 | 1.1% | 0.16 |
+
+**Conclusion:** Baseline (30s-10m-eom) is the cleanest trade-off. Lower min_size creates tiny chaff clusters.
+
+#### Round 4: 2-Step Hierarchical Clustering (RECOMMENDED)
+
+**Motivation:** Path B's dominant cluster (Cluster 4, 68% of data) needed splitting without losing clean structure.
+
+**Method:**
+1. First pass: Path B descriptors → UMAP(5D, md=0.0) → HDBSCAN(30s, 10m) → 5 clusters (0% noise, Silhouette 0.60)
+2. Second pass: Extract Cluster 4 (940 spectra) → re-run UMAP(5D, md=0.0) → HDBSCAN(30s, 10m) → 7 sub-clusters + 17.8% noise (Silhouette 0.46)
+3. Merge: stable core (4 clusters, 452 spectra) + sub-clusters (7 clusters, 773 spectra) + noise (167, 12%)
+
+| Metric | Before (1-pass) | After (2-step merge) |
+|--------|:---------------:|:--------------------:|
+| Clusters | 5 | **11** |
+| Noise | 0% | **12%** |
+| Cluster sizes | 36–940 (very skewed) | **36–260 (balanced)** |
+
+**Winner: 2-step hierarchical clustering** with spectral descriptors, UMAP(5D, md=0.0), and HDBSCAN(30s, 10m). Merged labels saved to `experiments/2026-06-07_phase2c-descriptor-umap5-mindist0/pseudo_labels_merged.npz`.
+
+**Decision:** ✅ Locked as the clustering front-end for Stage-1 classifier training.
 
