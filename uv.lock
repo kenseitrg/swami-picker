@@ -1140,6 +1140,7 @@ dependencies = [
     { name = "segyio" },
     { name = "timm" },
     { name = "torchvision" },
+    { name = "tqdm" },
     { name = "umap-learn" },
 ]
 
@@ -1163,6 +1164,7 @@ requires-dist = [
     { name = "segyio", specifier = ">=1.9.14" },
     { name = "timm", specifier = ">=1.0.27" },
     { name = "torchvision", specifier = ">=0.27.0" },
+    { name = "tqdm", specifier = ">=4.67.3" },
     { name = "umap-learn", specifier = ">=0.5.12" },
 ]
 

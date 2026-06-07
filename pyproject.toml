@@ -15,6 +15,7 @@ dependencies = [
     "segyio>=1.9.14",
     "timm>=1.0.27",
     "torchvision>=0.27.0",
+    "tqdm>=4.67.3",
     "umap-learn>=0.5.12",
 ]
 
