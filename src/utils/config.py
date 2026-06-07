@@ -194,6 +194,98 @@ class FKMAEConfig:
 
 
 @dataclass
+class VICRegConfig:
+    """Configuration for VICReg self-supervised pretraining on FK spectra."""
+
+    # Data
+    manifest_path: str = "data/processed/manifest.json"
+    val_fraction: float = 0.10
+    val_seed: int = 42
+
+    # Model (encoder = same ViT-Small as Phase 0)
+    img_size: int = 256
+    patch_size: int = 16
+    in_channels: int = 1
+    embed_dim: int = 384
+    depth: int = 12
+    num_heads: int = 6
+    mlp_ratio: float = 4.0
+    projector_hidden_dim: int = 2048
+    projector_out_dim: int = 2048
+
+    # VICReg loss weights
+    sim_weight: float = 25.0
+    var_weight: float = 25.0
+    cov_weight: float = 1.0
+
+    # Augmentation (same aggressive pipeline as MAE v3)
+    noise_std: float = 0.15
+    intensity_jitter: float = 0.50
+    freq_shift_max: float = 0.10
+    waven_shift_max: float = 0.05
+    freq_dropout_prob: float = 0.30
+    freq_dropout_width: float = 0.08
+
+    # Training
+    batch_size: int = 16
+    accum_steps: int = 1
+    epochs: int = 100
+    lr: float = 3e-4
+    weight_decay: float = 1e-6
+    betas: tuple[float, float] = (0.9, 0.95)
+    warmup_ratio: float = 0.1
+    grad_clip_norm: float = 1.0
+    seed: int = 42
+
+    # System
+    num_workers: int = 0
+    pin_memory: bool = True
+
+    # Logging
+    log_interval: int = 50
+    visualization_epochs: list[int] = field(
+        default_factory=lambda: [10, 25, 50, 100]
+    )
+
+    def to_dict(self) -> dict[str, Any]:
+        """Serialize config to a plain dictionary."""
+        return {
+            k: str(v) if isinstance(v, Path) else v
+            for k, v in asdict(self).items()
+        }
+
+    @classmethod
+    def from_yaml(cls, path: Path) -> "VICRegConfig":
+        """Load configuration from a YAML file."""
+        if not path.exists():
+            raise FileNotFoundError(f"Config file not found: {path}")
+
+        with open(path) as fh:
+            raw: dict[str, Any] = yaml.safe_load(fh)
+
+        if "betas" in raw and isinstance(raw["betas"], list):
+            raw["betas"] = tuple(raw["betas"])
+
+        known = {f.name for f in cls.__dataclass_fields__.values()}
+        unknown = set(raw) - known
+        if unknown:
+            raise TypeError(f"Unexpected config keys: {unknown}")
+
+        return cls(**raw)
+
+    def save_yaml(self, path: Path) -> None:
+        """Save configuration to a YAML file."""
+        path.parent.mkdir(parents=True, exist_ok=True)
+        with open(path, "w") as fh:
+            yaml.safe_dump(
+                self.to_dict(),
+                fh,
+                default_flow_style=False,
+                sort_keys=False,
+            )
+
+
+@dataclass
 class MNISTConfig:
     """Configuration for the Phase 0 MNIST smoke test.
 

@@ -19,6 +19,52 @@ from torch.utils.data import DataLoader
 
 from src.utils.plot_style import apply_style, save_figure
 
+
+def _compute_similarity_metrics(
+    embeddings: np.ndarray,
+    line_numbers: np.ndarray,
+) -> dict[str, float]:
+    """Compute intra-line, inter-line, and contrast metrics from embeddings.
+
+    Args:
+        embeddings: Array of shape ``(N, D)``.
+        line_numbers: Array of shape ``(N,)`` with integer line labels.
+
+    Returns:
+        Dictionary with ``mean_intra``, ``mean_inter``, and ``contrast``.
+    """
+    unique_lines = np.unique(line_numbers)
+    n_lines = len(unique_lines)
+
+    if n_lines < 2:
+        return {"mean_intra": 1.0, "mean_inter": 1.0, "contrast": 1.0}
+
+    embeddings_t = torch.from_numpy(embeddings).float()
+    embeddings_norm = torch.nn.functional.normalize(embeddings_t, dim=1)
+
+    class_embs = {
+        int(ln): embeddings_norm[line_numbers == ln] for ln in unique_lines
+    }
+
+    sim_matrix = np.zeros((n_lines, n_lines), dtype=np.float64)
+    for i, li in enumerate(unique_lines):
+        for j, lj in enumerate(unique_lines):
+            if i > j:
+                sim_matrix[i, j] = sim_matrix[j, i]
+                continue
+            ei = class_embs[int(li)]
+            ej = class_embs[int(lj)]
+            sims = torch.mm(ei, ej.t())
+            sim_matrix[i, j] = sims.mean().item()
+
+    intra = float(np.diag(sim_matrix).mean())
+    mask_off = ~np.eye(n_lines, dtype=bool)
+    inter = float(sim_matrix[mask_off].mean())
+    contrast = intra / (inter + 1e-8)
+
+    return {"mean_intra": intra, "mean_inter": inter, "contrast": contrast}
+
+
 if TYPE_CHECKING:
     from torch import Tensor
 
