@@ -45,13 +45,13 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--noise-std",
         type=float,
-        default=0.01,
+        default=0.05,
         help="Gaussian noise std.",
     )
     parser.add_argument(
         "--intensity-jitter",
         type=float,
-        default=0.15,
+        default=0.30,
         help="Intensity jitter factor.",
     )
     parser.add_argument(
@@ -124,7 +124,14 @@ def main() -> None:
 
         for col, data in enumerate([original, augmented]):
             ax = axes[row, col]
-            im = ax.imshow(data, cmap="viridis", extent=extent, vmin=vmin, vmax=vmax)
+            im = ax.imshow(
+                data,
+                cmap="viridis",
+                extent=extent,
+                vmin=vmin,
+                vmax=vmax,
+                aspect="auto",
+            )
             ax.set_xlabel("Frequency (Hz)")
             ax.set_ylabel("Wavenumber (1/m)")
             if row == 0:

@@ -24,8 +24,8 @@ block_size: 2
 
 # ── Augmentation ──────────────────────────────────────────────────
 # Applied on-the-fly to training split only
-noise_std: 0.01          # Gaussian noise std in normalized amplitude units
-intensity_jitter: 0.15   # relative scale factor U(1±jitter)
+noise_std: 0.05          # Gaussian noise std in normalized amplitude units
+intensity_jitter: 0.30   # relative scale factor U(1±jitter)
 
 # ── Training ──────────────────────────────────────────────────────
 batch_size: 2

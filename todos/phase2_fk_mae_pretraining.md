@@ -60,8 +60,8 @@ Create `FKMAEConfig` with the following groups. All model hyperparameters mirror
 - `mask_ratio: float = 0.75`, `use_block_masking: bool = True`, `block_size: int = 2`
 
 **Augmentation**
-- `noise_std: float = 0.01` — std for Gaussian noise (in normalized amplitude units)
-- `intensity_jitter: float = 0.15` — relative scale factor, i.e. `tensor * U(1±jitter)`
+- `noise_std: float = 0.05` — std for Gaussian noise (in normalized amplitude units)
+- `intensity_jitter: float = 0.30` — relative scale factor, i.e. `tensor * U(1±jitter)`
 
 **Training**
 - `batch_size: int = 2`, `accum_steps: int = 8` → eff. batch 16 (conservative for 6 GB)

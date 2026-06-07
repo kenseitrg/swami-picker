@@ -5,8 +5,10 @@ import logging
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
+import matplotlib as mpl
 import matplotlib.patches as mpatches
 import matplotlib.pyplot as plt
+from mpl_toolkits.axes_grid1 import make_axes_locatable
 import numpy as np
 import torch
 from sklearn.metrics import silhouette_score
@@ -641,11 +643,12 @@ def plot_fk_reconstruction_grid(
             ax.axis("off")
             if row == 0:
                 ax.set_title(titles[col])
-        # Shared colorbar per row
-        cbar_ax = fig.add_axes((0.92, 0.15 + (n - 1 - row) * (0.7 / n), 0.015, 0.5 / n))
+        # Shared colorbar per row, attached to rightmost axis
+        divider = make_axes_locatable(axes[row, -1])
+        cbar_ax = divider.append_axes("right", size="5%", pad=0.05)
         fig.colorbar(im, cax=cbar_ax)
 
-    plt.tight_layout(rect=(0, 0, 0.90, 1))
+    plt.tight_layout()
     save_figure(fig, save_path)
     plt.close(fig)
     logger.info("Saved FK reconstruction grid to %s", save_path)
@@ -728,7 +731,7 @@ def plot_fk_umap(
             sil_score = None
 
     fig, ax = plt.subplots(figsize=(8, 6))
-    cmap = plt.cm.get_cmap("tab20", max(n_lines, 2))
+    cmap = mpl.colormaps["tab20"].resampled(max(n_lines, 2))
     scatter = ax.scatter(
         embedding_2d[:, 0],
         embedding_2d[:, 1],

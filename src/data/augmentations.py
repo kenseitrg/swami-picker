@@ -23,7 +23,7 @@ class FKSpectrumTransform:
             The scale is drawn from ``U(1 - jitter, 1 + jitter)``.
     """
 
-    def __init__(self, noise_std: float = 0.01, intensity_jitter: float = 0.15) -> None:
+    def __init__(self, noise_std: float = 0.05, intensity_jitter: float = 0.30) -> None:
         """Initialise the transform.
 
         Args:
