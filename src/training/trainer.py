@@ -139,7 +139,7 @@ class MAETrainer:
             self.optimizer,
             num_warmup_steps=warmup_steps,
             num_training_steps=total_steps,
-            min_lr_ratio=0.1,
+            min_lr_ratio=0.02,
         )
 
     def _autocast_context(self) -> Any:

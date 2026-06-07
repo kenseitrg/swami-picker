@@ -18,24 +18,24 @@ mlp_ratio: 4.0
 decoder_embed_dim: 256
 decoder_depth: 4
 decoder_num_heads: 8
-mask_ratio: 0.25                # low masking — model sees 75% of spectrum, harder to cheat
-use_block_masking: false       # random masking preserves dispersion curve fragments
+mask_ratio: 0.25 # low masking — model sees 75% of spectrum, harder to cheat
+use_block_masking: false # random masking preserves dispersion curve fragments
 
 # ── Augmentation (aggressive) ─────────────────────────────────────
 # Applied on-the-fly to training split only.
 # Aggressive augmentations prevent the model learning a trivial
 # "average spectrum" by increasing per-sample diversity.
-noise_std: 0.15           # Gaussian noise std (3x from baseline)
-intensity_jitter: 0.50    # relative scale factor U(1±jitter) (up from 0.30)
-freq_shift_max: 0.10      # max frequency shift as fraction of width (~26 px)
-waven_shift_max: 0.05     # max wavenumber shift as fraction of height (~13 px)
-freq_dropout_prob: 0.30   # 30% chance of dropping a frequency band
-freq_dropout_width: 0.08  # dropped band width as fraction of width (~20 px)
+noise_std: 0.15 # Gaussian noise std (3x from baseline)
+intensity_jitter: 0.50 # relative scale factor U(1±jitter) (up from 0.30)
+freq_shift_max: 0.10 # max frequency shift as fraction of width (~26 px)
+waven_shift_max: 0.05 # max wavenumber shift as fraction of height (~13 px)
+freq_dropout_prob: 0.30 # 30% chance of dropping a frequency band
+freq_dropout_width: 0.08 # dropped band width as fraction of width (~20 px)
 
 # ── Training ──────────────────────────────────────────────────────
 batch_size: 2
 accum_steps: 8 # effective batch = 16 (conservative for RTX 3060)
-epochs: 100  # low masking needs more passes to converge
+epochs: 100 # low masking needs more passes to converge
 lr: 5.0e-05 # scaled for smaller effective batch vs Phase 0
 weight_decay: 0.05
 betas: [0.9, 0.95]
