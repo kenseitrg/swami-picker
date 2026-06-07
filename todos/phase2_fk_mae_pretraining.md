@@ -388,142 +388,152 @@ does not need to distinguish samples to minimize the reconstruction loss.
 
 ---
 
-## 12. VICReg Implementation Plan
+## 12. VICReg Implementation — Completed but Failed
 
-### Overview
+### Implementation Summary
 
-VICReg learns embeddings by maximizing agreement between two augmented views of
-the same spectrum while explicitly preventing collapse via variance and covariance
-regularization. No reconstruction, no negative pairs, no memory bank.
+All files were created and a 50-epoch run was executed:
+- `src/models/vicreg.py` — VICReg model + loss (verified correct vs paper)
+- `src/training/vicreg_trainer.py` — Trainer with dual-view augmentation
+- `src/utils/config.py` — `VICRegConfig` dataclass
+- `configs/phase2_vicreg.yaml` — Config with λ=25, µ=25, ν=1, batch=16, LR=3e-4
+- `scripts/train_vicreg.py` — CLI entry point
 
-**Loss:** L = λ·s(Z, Z′) + µ·v(Z) + ν·c(Z)
-- **Invariance** s(Z, Z′): MSE between augmented-view embeddings
-- **Variance** v(Z): hinge loss keeping std(Z[:,j]) ≥ 1 for each feature j
-- **Covariance** c(Z): sum of squared off-diagonal elements of the covariance matrix
+### v4 — 2026-06-07: VICReg (50 epochs, batch=16)
 
-### Files to Create/Modify
+| Setting | Value |
+|---------|-------|
+| `batch_size` | 16 |
+| `projector_hidden_dim` | 2048 |
+| `projector_out_dim` | 2048 |
+| `sim_weight` | 25.0 |
+| `var_weight` | 25.0 |
+| `cov_weight` | 1.0 |
+| `epochs` | 50 |
+| `lr` | 3e-4 |
 
-| File | Action | Purpose |
-|------|--------|---------|
-| `src/models/vicreg.py` | **New** | VICReg model: encoder (ViT-Small) + projector MLP + loss computation |
-| `src/training/vicreg_trainer.py` | **New** | VICRegTrainer (builds on MAETrainer base class) |
-| `src/utils/config.py` | Modify | Add `VICRegConfig` dataclass |
-| `configs/phase2_vicreg.yaml` | **New** | Default VICReg config |
-| `scripts/train_vicreg.py` | **New** | CLI entry point for VICReg training |
-| `src/evaluation/visualize.py` | Modify | Reuse FK visualization functions (UMAP, similarity matrix) |
+**Outcome:** ❌ Embedding collapse persists. Silhouette = −0.252, contrast = 1.036 at epoch 50.
+Loss plateaued at ~37.0 (inv=0.007, var=1.30, cov=4.39). UMAP shows a fuzzy ball with no
+line-based clustering. Similarity matrix: intra=0.895, inter=0.864.
 
-### VICReg Model (`src/models/vicreg.py`)
-
-```python
-class VICReg(nn.Module):
-    """VICReg self-supervised learning model.
-
-    Architecture:
-        Input ──► Encoder (ViT-Small, no decoder) ──► Projector MLP ──► Embedding
-
-    The encoder is the same ViT-Small from Phase 0 MAE (without the decoder).
-    The projector is a 3-layer MLP (embed_dim → 2048 → 2048 → 2048) with BN + ReLU.
-    """
-```
-
-**Loss computation:**
-```python
-def vicreg_loss(z1, z2, sim_weight=25.0, var_weight=25.0, cov_weight=1.0):
-    # Invariance: MSE between the two views
-    inv_loss = F.mse_loss(z1, z2)
-
-    # Variance: hinge loss to keep std ≥ 1
-    std_z1 = torch.sqrt(z1.var(dim=0) + 1e-4)
-    std_z2 = torch.sqrt(z2.var(dim=0) + 1e-4)
-    var_loss = torch.mean(F.relu(1.0 - std_z1)) + torch.mean(F.relu(1.0 - std_z2))
-
-    # Covariance: off-diagonal regularization
-    z1_centered = z1 - z1.mean(dim=0)
-    z2_centered = z2 - z2.mean(dim=0)
-    cov_z1 = (z1_centered.T @ z1_centered) / (z1.size(0) - 1)
-    cov_z2 = (z2_centered.T @ z2_centered) / (z2.size(0) - 1)
-    cov_loss = (cov_z1.pow(2).sum() - cov_z1.diag().pow(2).sum()) / z1.size(1)
-    cov_loss += (cov_z2.pow(2).sum() - cov_z2.diag().pow(2).sum()) / z2.size(1)
-
-    return sim_weight * inv_loss + var_weight * var_loss + cov_weight * cov_loss
-```
-
-### Augmentation
-
-Reuse `FKSpectrumTransform` with the aggressive params from MAE v3.
-Each training step: draw 2 different augmentations of the same sample
-(by calling the transform twice with different random seeds).
-
-### Training Configuration (Initial Guess)
-
-| Parameter | Value | Rationale |
-|-----------|-------|-----------|
-| Encoder | ViT-Small (same as Phase 0) | Proven architecture, reuse weights |
-| Projector | 3× MLP: 384 → 2048 → 2048 → 2048 | Standard VICReg design |
-| Embedding dim | 2048 | Matches projector output; can be reduced later |
-| λ (sim_weight) | 25.0 | From VICReg paper (ImageNet) |
-| µ (var_weight) | 25.0 | From VICReg paper |
-| ν (cov_weight) | 1.0 | From VICReg paper |
-| Batch size | 16 | VICReg benefits from larger batches for variance computation |
-| Epochs | 100 | Matches MAE v3 schedule |
-| Optimizer | AdamW, LR=3e-4 | Standard VICReg uses SGD but AdamW is more stable |
-| LR schedule | Cosine decay, warmup 10% | Same as MAE |
-| Weight decay | 1e-6 | Light decay (VICReg paper uses no decay) |
-
-### Trainer (`src/training/vicreg_trainer.py`)
-
-Subclass `MAETrainer` with VICReg-specific overrides:
-- `_train_epoch`: For each batch, generate 2 augmentations, forward through encoder+projector, compute VICReg loss
-- `_validate`: Run encoder on val set (no augmentation), extract embeddings via `model.encoder.extract_embeddings()` (mean pool)
-- `_run_visualization`: Same as FK trainer — UMAP, similarity matrix, Silhouette
-
-**Note:** VICReg needs batch_size ≥ 16 for stable variance computation. If VRAM doesn't fit
-batch=16 with ViT-Small, use gradient accumulation (batch=2, accum=8) or reduce projector size.
-
-### VRAM Estimation
-
-- ViT-Small encoder forward: ~2× MAE (two views) = ~500 MB × 2 = ~1 GB
-- Projector MLP: negligible (~10 MB)
-- Total: ~1.5 GB for batch=16 (well within 6 GB limit)
-
-### Success Criteria
-
-Same as MAE Phase 2, updated for VICReg:
-
-| Check | Target | How to Verify |
-|-------|--------|---------------|
-| Training stability | Loss trends down over epochs | `metrics.jsonl` + loss curve |
-| Embedding structure | UMAP shows separable clusters by line_number | Manual review at epoch 10, 25, 50, 100 |
-| Silhouette score | > 0.1 (positive) | Logged at each visualization epoch |
-| Intra/inter contrast | > 1.5 | Similarity matrix plot |
-| VRAM | < 4.5 GB | `max_vram_mb` logged |
-
-### Fallback: BYOL (if VICReg Silhouette < 0.1)
-
-If VICReg fails to produce positive Silhouette, switch to BYOL:
-- Online encoder (ViT-Small) + projector (MLP: 384→2048→2048→2048) + predictor (MLP: 2048→512→2048)
-- Target encoder: EMA copy of online (τ=0.996)
-- Loss: negative cosine similarity between predictor output and target embedding
-- Batch size: as low as 2 (BYOL works at very small batches)
-
-**Code estimate:** ~200 lines. `src/models/byol.py` + `src/training/byol_trainer.py`.
-
-### Final Fallback: Classical Feature Extraction
-
-If neither VICReg nor BYOL produces meaningful clusters:
-1. Flatten all 1145 spectra → PCA (50-200 components) → UMAP → HDBSCAN
-2. Or use spectral descriptors: peak frequency locations, mode bandwidth, energy distribution
-3. Proceed directly to Phase 3 (clustering) with classical features
+**Key finding:** The variance hinge loss (`var_loss ≈ 1.30`) is *still active* after 50 epochs,
+meaning many embedding dimensions have std < 1. The model cannot push variance above the
+threshold because all samples map to the same small region of embedding space. The
+covariance term cannot decorrelate features because there is no signal to decorrelate.
 
 ---
 
-## 13. Implementation Order (VICReg)
+## 13. Synthesis: Why All Self-Supervised Methods Failed
 
-1. `src/models/vicreg.py` — VICReg model + loss function
-2. `src/utils/config.py` — `VICRegConfig` dataclass
-3. `configs/phase2_vicreg.yaml` — default config
-4. `src/training/vicreg_trainer.py` — trainer subclass
-5. `scripts/train_vicreg.py` — CLI entry point
-6. Update `experiments/MODEL_CHANGELOG.md` — new entry for VICReg
-7. Smoke test (2 epochs, small batch) — verify loss trends down
-8. Full 100-epoch run
+### The Core Problem
+
+FK spectra are **too homogeneous**. All 1,145 training samples share the same global
+structure: a dark background with diagonal dispersion mode bands. The differences between
+spectra from different receiver lines are extremely subtle — essentially noise in the
+exact position and amplitude of the modes.
+
+| Method | Collapse Mode | Why It Failed |
+|--------|--------------|---------------|
+| **MAE** | Exact collapse (all embeddings ≈ identical) | Reconstruction loss minimized by predicting "average spectrum" for every masked patch. No need to distinguish samples. |
+| **VICReg** | Fuzzy-ball collapse (all embeddings in small region) | Variance hinge cannot push std ≥ 1 because the optimal representation for all samples is the same small region. Invariance + covariance have no signal to work with. |
+
+**Signal-to-noise ratio is too low** for any self-supervised objective to extract
+distinguishing features. The model learns the shared structure perfectly but never
+learns what makes spectra different.
+
+### Evidence Summary
+
+| Experiment | Best Silhouette | Best Contrast | Verdict |
+|-----------|-----------------|---------------|---------|
+| MAE v1 (block 75%) | −0.322 | 1.078 | ❌ Collapse |
+| MAE v2 (random 50%) | ~−0.30 | ~1.08 | ❌ Collapse |
+| MAE v3 (aggressive aug, 25%) | ~−0.30 | ~1.08 | ❌ Collapse |
+| VICReg v4 (batch=16, 50 ep) | −0.252 | 1.036 | ❌ Collapse |
+
+All four experiments converge to the same result: **the data itself does not contain
+enough distinguishing signal for unsupervised representation learning.**
+
+---
+
+## 14. Next Steps — Decision Tree
+
+### Option A: BYOL (Low effort, low expected reward)
+
+Bootstrap Your Own Latent uses an EMA target network + predictor. It doesn't rely on
+batch statistics like VICReg, so it might escape the fuzzy-ball minimum. But BYOL also
+lacks negative pairs — it only pushes augmented views of the *same* sample together.
+If VICReg's explicit variance term couldn't prevent collapse, BYOL's implicit mechanism
+is unlikely to succeed either.
+
+**Effort:** ~1 hour (model + trainer already exist, just add EMA target + predictor)
+**Expected outcome:** 20% chance of marginal improvement (Silhouette > −0.1)
+
+### Option B: SimCLR / Contrastive Learning (Medium effort, medium reward)
+
+Uses explicit negative pairs: push *different* samples apart in embedding space while
+pulling augmented views of the same sample together. This directly addresses collapse.
+
+**Problem:** SimCLR needs batch sizes of 256+ for stable negative sampling. With 6GB VRAM
+and our model size (30M params), we'd need gradient accumulation (batch=4, accum=64).
+This makes training very slow (~2 hours for 100 epochs).
+
+**Effort:** ~2 hours (implement InfoNCE loss, memory bank or large-batch accum)
+**Expected outcome:** 50% chance of meaningful improvement (Silhouette > 0.0)
+
+### Option C: Supervised Pretraining with Pseudo-Labels (Medium effort, high reward) — **RECOMMENDED**
+
+Skip self-supervised entirely. Use weak supervision:
+1. Extract simple features from raw spectra (e.g., PCA 50 components, or spectral descriptors)
+2. Cluster with HDBSCAN to get pseudo-labels
+3. Train a supervised ViT classifier (cross-entropy) to predict pseudo-labels
+4. Use the classifier's penultimate layer as embeddings for Phase 3
+
+The cross-entropy loss **explicitly forces the model to discriminate between clusters**,
+which is exactly what self-supervised methods failed to do.
+
+**Effort:** ~1 hour (HDBSCAN clustering + supervised classifier training)
+**Expected outcome:** 70% chance of Silhouette > 0.1, contrast > 1.5
+
+### Option D: Classical Feature Extraction (Low effort, guaranteed baseline)
+
+Skip learned embeddings entirely:
+1. Flatten spectra → PCA (50-200 components) → UMAP → HDBSCAN clustering
+2. Or use spectral descriptors: peak frequencies, mode bandwidths, energy distribution
+3. Proceed directly to Phase 3 (active learning) with classical features
+
+This provides a **guaranteed working baseline** even if all learned approaches fail.
+The downside is that classical features may miss subtle patterns that a neural network
+could theoretically learn.
+
+**Effort:** ~30 minutes
+**Expected outcome:** Silhouette unknown, but clusters will form. Quality depends on
+feature engineering.
+
+---
+
+## 15. Recommendation
+
+**Primary:** Implement **Option C** (supervised pretraining with pseudo-labels). It is
+the most principled next step because it gives the model an explicit discrimination
+signal that self-supervised methods lack.
+
+**Fallback:** If Option C fails after a 30-epoch test, proceed immediately to **Option D**
+(classical features) and move to Phase 3. Do not spend more time on representation
+learning — the bottleneck is the data, not the algorithm.
+
+**Do not pursue:** Option A (BYOL) unless Option C fails and the user explicitly wants
+to exhaust all deep-learning approaches before falling back to classical methods.
+
+---
+
+## 16. Implementation Order (Option C)
+
+1. Extract raw spectra → flatten → PCA (50-200 components)
+2. HDBSCAN clustering on PCA embeddings → pseudo-labels
+3. Create `FKClassifierConfig` + `configs/phase2_supervised.yaml`
+4. Implement `src/models/fk_classifier.py` — ViT-Small + classification head
+5. Implement `src/training/supervised_trainer.py` — standard cross-entropy training
+6. Train 30 epochs, evaluate Silhouette / contrast on pseudo-labels
+7. If Silhouette > 0.1, train full 100 epochs and proceed to Phase 3
+8. If Silhouette < 0.1, fall back to Option D (classical features)
+

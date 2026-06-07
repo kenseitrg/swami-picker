@@ -5,7 +5,7 @@
 |--------|-------------|
 | **Objective** | Develop a robust, human-in-the-loop pipeline to extract fundamental-mode dispersion curves from noisy, highly variable FK spectra for downstream inversion. |
 | **Key Challenges** | No ground-truth labels, higher-order modes often dominate, rapid near-surface variability, limited compute (RTX 3060, 6GB VRAM), coordinate system mismatch between model and inversion software. |
-| **Proposed Solution** | Two-stage self-supervised learning: (1) Masked Autoencoder (MAE) pretraining for physics-aware embeddings, (2) Prototype-based clustering → active expert labeling → supervised fine-tuning. |
+| **Proposed Solution** | Representation learning pipeline: (1) Weakly-supervised pretraining with pseudo-labels (clustering → classifier), (2) Prototype-based clustering → active expert labeling → supervised fine-tuning. MAE/VICReg self-supervised approaches were exhausted and abandoned due to embedding collapse on homogeneous FK data. |
 | **Expected Output** | Automated picking model with uncertainty estimates, exportable dispersion curves in original physical units, reusable embedding encoder for future datasets. |
 
 ---
@@ -107,103 +107,102 @@ metadata = {
 
 ---
 
-## 🧠 Phase 2: Self-Supervised Pretraining (Unsupervised)
+## 🧠 Phase 2: Representation Learning (Unsupervised → Weakly Supervised)
 
-### ⚠️ MAE Experiment — Failed (Abandoned)
+### Status: Self-Supervised Approaches Exhausted — Both Failed
 
-Three MAE variants were tested. **All produced embedding collapse** (Silhouette < 0,
-contrast < 1.1), conclusively demonstrating that the pixel-level reconstruction
-objective is unsuitable for FK spectra:
+**Four experiments conclusively demonstrate that FK spectra are too homogeneous for
+self-supervised representation learning.**
 
-| Experiment | Setting | Val Loss | Silhouette | Verdict |
-|-----------|---------|----------|------------|---------|
-| v1 (baseline) | Block masking 75%, 30 epochs | 0.084 | −0.322 | ❌ Collapse |
-| v2 (random) | Random masking 50%, 30 epochs | 0.075 | ~−0.3 | ❌ Collapse |
-| v3 (aggressive) | Aggressive aug, masking 25%, 100 ep (stopped @54) | 0.095 | ~−0.3 | ❌ Collapse |
+| Experiment | Method | Epochs | Best Silhouette | Best Contrast | Verdict |
+|-----------|--------|--------|-----------------|---------------|---------|
+| v1 | MAE (block 75%) | 30 | −0.322 | 1.078 | ❌ Collapse |
+| v2 | MAE (random 50%) | 30 | ~−0.30 | ~1.08 | ❌ Collapse |
+| v3 | MAE (aggressive aug, 25%) | 54 | ~−0.30 | ~1.08 | ❌ Collapse |
+| v4 | VICReg (batch=16) | 50 | −0.252 | 1.036 | ❌ Collapse |
 
-**Root cause:** All FK spectra share the same global structure (dark field + diagonal
-dispersion bands). The MAE can trivially minimize MSE by predicting the "average
-spectrum" for every masked patch, never needing to distinguish samples. Encoder
-embeddings become degenerate.
+**Root cause:** All 1,145 FK spectra share the same global structure (dark field +
+diagonal dispersion bands). The differences between receiver lines are extremely
+subtle — essentially noise in mode position/amplitude. The signal-to-noise ratio is
+too low for any self-supervised objective to extract distinguishing features.
+
+| Method | Collapse Mode | Why It Failed |
+|--------|--------------|---------------|
+| **MAE** | Exact collapse | Reconstruction loss minimized by predicting "average spectrum" for every masked patch |
+| **VICReg** | Fuzzy-ball collapse | Variance hinge cannot push std ≥ 1 because all samples map to the same small region. Covariance has no signal to decorrelate. |
 
 ---
 
-### Primary Approach: VICReg (Current)
+### Option C: Supervised Pretraining with Pseudo-Labels (RECOMMENDED)
 
-**Paper:** Bardes et al., "VICReg: Variance-Invariance-Covariance Regularization for
-Self-Supervised Learning", ICLR 2022.
+**Approach:** Skip self-supervised learning. Use weak supervision via clustering:
+1. Extract simple features from raw spectra (PCA 50-200 components, or spectral descriptors)
+2. Cluster with HDBSCAN to obtain pseudo-labels
+3. Train a supervised ViT classifier (cross-entropy) to predict pseudo-labels
+4. Use the classifier's penultimate layer as embeddings for Phase 3
 
-VICReg replaces the reconstruction objective with three explicit regularizers that
-force the embedding space to be informative:
-1. **Invariance** — two augmented views of the same spectrum have similar embeddings
-2. **Variance** — each embedding dimension has std ≥ 1 across the batch (hinge loss)
-3. **Covariance** — embedding dimensions are decorrelated (off-diagonal → 0)
-
-**Why this should work for FK (where MAE failed):**
-- No reconstruction head → model cannot cheat by predicting average pixels
-- Variance term explicitly prevents dimensional collapse (MAE's failure mode)
-- Invariance term forces the model to learn *what stays the same* across augmentations
-  — i.e., the underlying spectrum identity, not the noise
-- No decoder needed → faster training, lower VRAM
+**Why this should work where self-supervised failed:**
+- Cross-entropy loss **explicitly forces the model to discriminate between clusters**
+- The model receives a direct "push different samples apart" signal
+- Even if pseudo-labels are noisy, the classifier must learn to separate them
+- This is the standard approach when unsupervised methods fail on homogeneous data
 
 #### Architecture
 ```
-Input ─── Aug A ──► Encoder (ViT-Small, shared) ──► Projector MLP ──► Z₁
-         Aug B ──► Encoder (ViT-Small, shared) ──► Projector MLP ──► Z₂
-
-L = λ · MSE(Z₁, Z₂)                    (invariance)
-  + µ · Σⱼ max(0, 1 − √Var(Zⱼ))        (variance, per-feature)
-  + ν · Σᵢ≠ⱼ C[i,j]² / D              (covariance, C = cov matrix of Z)
+Input ──► Encoder (ViT-Small) ──► Mean Pool ──► Classifier MLP ──► Logits
+                                    │
+                                    └──► Embedding (extracted for Phase 3)
 ```
 
 #### Configuration
 | Parameter | Value | Rationale |
 |-----------|-------|-----------|
-| Encoder | ViT-Small (same as Phase 0, no decoder head) | Reuse proven architecture |
-| Projector | 3× MLP: 384 → 2048 → 2048 → 2048 + BN + ReLU | Standard VICReg design |
-| Embedding dim | 2048 | Matches projector output |
-| λ (sim_weight) | 25.0 | VICReg paper defaults |
-| µ (var_weight) | 25.0 | VICReg paper defaults |
-| ν (cov_weight) | 1.0 | VICReg paper defaults |
-| Batch size | 16 (or batch=2 + accum=8) | Larger batches stabilize variance estimate |
-| Optimizer | AdamW, LR=3e-4, cosine decay, 10% warmup | Standard schedule |
-| Augmentations | Same aggressive pipeline as MAE v3 | Already developed and tested |
-| Epochs | 100 | Matches MAE v3 schedule |
+| Encoder | ViT-Small (same as Phase 0) | Reuse proven architecture |
+| Classifier | 2× MLP: 384 → 256 → K (num clusters) | Lightweight head |
+| Loss | Cross-entropy | Explicit discrimination signal |
+| Batch size | 16 | Same as VICReg (proven to fit in VRAM) |
+| Optimizer | AdamW, LR=1e-4, cosine decay | Lower LR than VICReg (more stable for classification) |
+| Epochs | 30 (smoke test) → 100 (full) | Quick validation before committing |
 
 #### Success Criteria
 | Metric | Target | How to Verify |
 |--------|--------|---------------|
+| Training accuracy | > 60% (above random for K clusters) | Logged per epoch |
+| Validation accuracy | Within 10% of training accuracy | Check for overfitting |
 | Silhouette score | > 0.1 | Logged at visualization epochs |
 | Intra/inter contrast | > 1.5 | Similarity matrix plot |
-| UMAP structure | Separable by line_number | Manual plot review |
 | VRAM | < 4.5 GB | `max_vram_mb` logged |
 
 ---
 
-### Fallback: BYOL (if VICReg Silhouette < 0.1)
+### Option D: Classical Feature Extraction (Guaranteed Baseline)
 
-**Paper:** Grill et al., "Bootstrap Your Own Latent", NeurIPS 2020.
+If Option C fails after a 30-epoch test, fall back immediately to classical methods:
+1. Flatten spectra → PCA (50–200 components) → UMAP → HDBSCAN clustering
+2. Or use spectral descriptors: peak frequencies, mode bandwidths, energy distribution
+3. Proceed directly to Phase 3 (active learning) with classical features
 
-Uses an online–target network pair (EMA update of target). The online network must
-predict the target's embedding of a differently augmented view, creating a stable
-learning signal. Works at very small batch sizes.
-
-#### Architecture
-```
-View 1 ──► Online encoder ──► Projector ──► Predictor ──► Prediction q
-View 2 ──► Target encoder ──► Projector ──────────────────► Target z (stop-grad)
-                   ▲ EMA: θ_target ← τ·θ_target + (1−τ)·θ_online
-Loss = 2 − 2·(q·z) / (||q||·||z||)  (negative cosine similarity)
-```
+This provides a **guaranteed working baseline**. The tradeoff is that classical features
+may miss subtle patterns, but they will produce separable clusters for downstream picking.
 
 ---
 
-### Final Fallback: Classical Feature Extraction
+### Abandoned Approaches (Documented for Reference)
 
-If all learned approaches fail:
-- Flatten spectra → PCA (50–200 components) → HDBSCAN clustering
-- Or use spectral descriptors (peak frequencies, mode bandwidth, energy distribution)
-- This sacrifices the learned representation benefits but provides a working pipeline
+#### MAE (Masking Ratios 75% → 25%)
+Pixel-level reconstruction objective. Failed because "average spectrum" prediction
+minimizes MSE without learning distinguishing features.
+
+#### VICReg (Variance-Invariance-Covariance)
+Bardes et al., ICLR 2022. Failed because explicit variance regularization cannot
+overcome the fundamental lack of distinguishing signal in the data. Variance hinge
+remained active (std < 1) after 50 epochs because all samples collapsed to the same
+small region of embedding space.
+
+#### BYOL (Not Pursued)
+Grill et al., NeurIPS 2020. EMA-based self-supervised method. Not pursued because
+it lacks negative pairs and is unlikely to succeed where VICReg's stronger explicit
+regularization failed.
 
 ---
 

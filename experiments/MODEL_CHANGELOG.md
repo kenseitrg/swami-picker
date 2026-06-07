@@ -19,6 +19,6 @@ Every modification to model architecture, loss formulation, or data augmentation
 | 2026-06-07 | phase2-fk-mae-v1 | Phase 0 ViT-MAE transferred to FK data. Block masking 75%, Gaussian noise (std=0.01) + intensity jitter (±15%). Val split: 120 phase-1 val + 10% random from train (~247 total). Epochs=30. | N/A | val_loss=0.084, Silhouette=−0.322, contrast=1.078 | ❌ Embedding collapse |
 | 2026-06-07 | phase2-fk-mae-v2 | Random masking 50%, same augmentation as v1. Epochs=30. | v1: val_loss=0.084, Silhouette=−0.322, contrast=1.078 | val_loss=0.075, Silhouette≈−0.3, contrast≈1.08 | val_loss −0.009, Silhouette no change — still collapsed |
 | 2026-06-07 | phase2-fk-mae-v3 | Aggressive aug (noise=0.15, jitter=0.50, freq/waven shift, band dropout), random masking 25%, 100 epochs planned (stopped at 54), min_lr=1e-6. | v2: val_loss=0.075, collapse | val_loss=0.095 (epoch 54), still collapsed | ❌ MAE fundamentally unsuitable for FK spectra |
-| 2026-06-07 | phase2-vicreg-v1 | (Planned) VICReg self-supervised learning. ViT-Small encoder (no decoder) + projector MLP. Same aggressive augmentations. | N/A | TBD | N/A |
+| 2026-06-07 | phase2-vicreg-v1 | VICReg self-supervised learning. ViT-Small encoder (no decoder) + projector MLP (2048-d). Loss: λ=25, µ=25, ν=1. Batch=16, LR=3e-4, 50 epochs. Same aggressive augmentations. | N/A | Silhouette=−0.252, contrast=1.036, loss=37.0 | ❌ Fuzzy-ball collapse — variance hinge still active after 50 epochs |
 
 <!-- Append new entries above this line -->
