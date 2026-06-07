@@ -457,7 +457,7 @@ enough distinguishing signal for unsupervised representation learning.**
 
 ## 14. Next Steps — Decision Tree
 
-### Option A: BYOL (Low effort, low expected reward)
+### Option A: BYOL (Low effort, low expected reward) — **DO NOT PURSUE**
 
 Bootstrap Your Own Latent uses an EMA target network + predictor. It doesn't rely on
 batch statistics like VICReg, so it might escape the fuzzy-ball minimum. But BYOL also
@@ -465,40 +465,48 @@ lacks negative pairs — it only pushes augmented views of the *same* sample tog
 If VICReg's explicit variance term couldn't prevent collapse, BYOL's implicit mechanism
 is unlikely to succeed either.
 
-**Effort:** ~1 hour (model + trainer already exist, just add EMA target + predictor)
-**Expected outcome:** 20% chance of marginal improvement (Silhouette > −0.1)
+**Decision:** ❌ Abandoned. The data bottleneck is fundamental; more self-supervised
+variants will not help.
 
-### Option B: SimCLR / Contrastive Learning (Medium effort, medium reward)
+### Option B: SimCLR / Contrastive Learning (Medium effort, medium reward) — **DO NOT PURSUE**
 
 Uses explicit negative pairs: push *different* samples apart in embedding space while
 pulling augmented views of the same sample together. This directly addresses collapse.
 
 **Problem:** SimCLR needs batch sizes of 256+ for stable negative sampling. With 6GB VRAM
 and our model size (30M params), we'd need gradient accumulation (batch=4, accum=64).
-This makes training very slow (~2 hours for 100 epochs).
+This makes training very slow (~2 hours for 100 epochs). More importantly, if VICReg's
+variance hinge cannot push embeddings apart, explicit negative pairs alone are unlikely
+to overcome the total lack of distinguishing signal in the data.
 
-**Effort:** ~2 hours (implement InfoNCE loss, memory bank or large-batch accum)
-**Expected outcome:** 50% chance of meaningful improvement (Silhouette > 0.0)
+**Decision:** ❌ Abandoned. Effort/reward ratio is poor given the data bottleneck.
 
-### Option C: Supervised Pretraining with Pseudo-Labels (Medium effort, high reward) — **RECOMMENDED**
+### Option C: Supervised Pretraining with Pseudo-Labels (Medium effort, high reward) — **RECOMMENDED & EXPANDED**
 
-Skip self-supervised entirely. Use weak supervision:
-1. Extract simple features from raw spectra (e.g., PCA 50 components, or spectral descriptors)
-2. Cluster with HDBSCAN to get pseudo-labels
-3. Train a supervised ViT classifier (cross-entropy) to predict pseudo-labels
-4. Use the classifier's penultimate layer as embeddings for Phase 3
+Skip self-supervised entirely. Use **weak supervision via clustering**:
+1. Extract geophysically meaningful features from preprocessed spectra
+2. Dimensionality reduction (UMAP) → HDBSCAN clustering → pseudo-labels
+3. Train a lightweight classifier (MLP / shallow CNN / ViT) on pseudo-labels
+4. **Pseudo-label expansion**: re-classify noise points (-1) with the trained model
+5. Retrain on the cleaned, expanded dataset
+6. Use the classifier's penultimate layer as embeddings for Phase 3
 
 The cross-entropy loss **explicitly forces the model to discriminate between clusters**,
 which is exactly what self-supervised methods failed to do.
 
-**Effort:** ~1 hour (HDBSCAN clustering + supervised classifier training)
+**Key architectural additions requested by user:**
+- **Two feature-engineering paths** for the clustering front-end (1D marginals + PCA, or physics-informed spectral descriptors).
+- **UMAP before HDBSCAN** (not PCA→HDBSCAN directly) to preserve non-linear geophysical structure.
+- **Iterative pseudo-label cleaning** (discard -1 initially, expand with >90% confidence, retrain).
+
+**Effort:** ~2–3 hours (feature extraction + UMAP/HDBSCAN + two-stage classifier training)
 **Expected outcome:** 70% chance of Silhouette > 0.1, contrast > 1.5
 
 ### Option D: Classical Feature Extraction (Low effort, guaranteed baseline)
 
 Skip learned embeddings entirely:
-1. Flatten spectra → PCA (50-200 components) → UMAP → HDBSCAN clustering
-2. Or use spectral descriptors: peak frequencies, mode bandwidths, energy distribution
+1. Use the same features as Option C (1D marginals or spectral descriptors)
+2. UMAP → HDBSCAN clustering
 3. Proceed directly to Phase 3 (active learning) with classical features
 
 This provides a **guaranteed working baseline** even if all learned approaches fail.
@@ -513,27 +521,296 @@ feature engineering.
 
 ## 15. Recommendation
 
-**Primary:** Implement **Option C** (supervised pretraining with pseudo-labels). It is
-the most principled next step because it gives the model an explicit discrimination
-signal that self-supervised methods lack.
+**Primary:** Implement **Option C** (supervised pretraining with pseudo-labels) with the
+expanded feature-engineering and iterative cleaning pipeline described below.
 
-**Fallback:** If Option C fails after a 30-epoch test, proceed immediately to **Option D**
+**Fallback:** If Option C fails after the full two-stage training (i.e. Silhouette < 0.1
+and contrast < 1.2 after pseudo-label expansion), proceed immediately to **Option D**
 (classical features) and move to Phase 3. Do not spend more time on representation
 learning — the bottleneck is the data, not the algorithm.
 
-**Do not pursue:** Option A (BYOL) unless Option C fails and the user explicitly wants
-to exhaust all deep-learning approaches before falling back to classical methods.
+---
+
+## 16. Expanded Option C: Detailed Implementation Plan
+
+### 16.1 Feature Extraction (Two Paths)
+
+Both paths operate on the **preprocessed spectra** (shape `(1, 256, 256)`, amplitude-normalized,
+clipped to `[-3, 3]` or `[-1, 1]`). Features are computed **per spectrum** and concatenated
+into a feature matrix `X ∈ ℝ^(N, D)`.
+
+#### Path A: 1D Marginal Distributions → PCA
+
+**Motivation:** FK spectra share a nearly identical 2D spatial background (dark field + diagonal bands).
+Summing along each axis collapses the 2D structure into 1D energy curves, forcing the model to
+focus purely on spectral energy distribution — which is highly correlated to subsurface geology.
+
+**Steps:**
+1. **Frequency marginal**: `E_f = sum(spectrum, axis=0)` → shape `(256,)` — "Energy vs. Frequency"
+2. **Wavenumber marginal**: `E_k = sum(spectrum, axis=1)` → shape `(256,)` — "Energy vs. Wavenumber"
+3. **Concatenate**: `x_marginal = concat([E_f, E_k])` → shape `(512,)`
+4. **Standardize**: zero mean, unit variance per dimension across the dataset.
+5. **PCA**: Fit `PCA(n_components=50–200)` on the standardized marginals. Use cumulative explained
+   variance to choose `n_components` (target ≥ 90 % variance).
+6. **Output**: `X_pca ∈ ℝ^(N, n_components)`.
+
+**Required module:** `src/evaluation/features.py` — function `extract_marginal_features(spectrum) → ndarray`
+and `build_pca_features(spectra: list[ndarray], n_components: int) → tuple[ndarray, PCA]`.
+
+#### Path B: Physics-Informed Spectral Descriptors
+
+**Motivation:** Hand-crafted descriptors directly encode geophysical properties (velocity,
+layer sharpness, energy partitioning) that are physically meaningful and invariant to
+amplitude scaling.
+
+**Descriptors (per spectrum):**
+
+| # | Descriptor | Formula | Physical Meaning | Shape |
+|---|------------|---------|------------------|-------|
+| 1 | Frequency centroid | `Σ f · E_f / Σ E_f` | Average frequency of energy | scalar |
+| 2 | Wavenumber centroid | `Σ k · E_k / Σ E_k` | Average wavenumber (inv. velocity) | scalar |
+| 3 | Frequency bandwidth (std) | `sqrt(Σ E_f·(f−centroid)² / Σ E_f)` | Sharpness of frequency content | scalar |
+| 4 | Wavenumber bandwidth (std) | `sqrt(Σ E_k·(k−centroid)² / Σ E_k)` | Sharpness of wavenumber content | scalar |
+| 5 | Frequency IQR | `percentile(E_f, 75) − percentile(E_f, 25)` | Robust bandwidth | scalar |
+| 6 | Wavenumber IQR | `percentile(E_k, 75) − percentile(E_k, 25)` | Robust bandwidth | scalar |
+| 7 | Low/High frequency energy ratio | `Σ_{f<f_mid} E_f / Σ_{f≥f_mid} E_f` | Energy partitioning | scalar |
+| 8–17 | Peak velocities at fixed frequencies | For 10 evenly-spaced freq bands, find `argmax_k(E_k @ band)` → `V = f/k` | Phase velocity profile | 10 scalars |
+| 18 | Frequency skewness | `skew(E_f)` | Asymmetry of energy distribution | scalar |
+| 19 | Wavenumber skewness | `skew(E_k)` | Asymmetry of energy distribution | scalar |
+| 20 | Total energy | `sum(spectrum)` | Overall amplitude | scalar |
+
+**Total dimensionality:** ~20 scalars per spectrum (expandable).
+
+**Steps:**
+1. Compute descriptor vector `x_desc ∈ ℝ^(D_desc)` for each spectrum.
+2. **Standardize**: zero mean, unit variance across the dataset (crucial — descriptors have vastly
+different scales: Hz vs. 1/m vs. dimensionless ratios).
+3. **Output**: `X_desc ∈ ℝ^(N, D_desc)`.
+
+**Required module:** `src/evaluation/features.py` — function `extract_spectral_descriptors(spectrum, freq_axis, waven_axis) → ndarray`.
+
+#### Path Selection
+
+- **Default:** Run both paths in parallel for the first experiment.
+- **Compare:** HDBSCAN stability (number of clusters, noise fraction, silhouette on retained labels).
+- **Lock:** Choose the path with higher Silhouette and lower noise fraction for production runs.
 
 ---
 
-## 16. Implementation Order (Option C)
+### 16.2 UMAP → HDBSCAN Clustering Pipeline
 
-1. Extract raw spectra → flatten → PCA (50-200 components)
-2. HDBSCAN clustering on PCA embeddings → pseudo-labels
-3. Create `FKClassifierConfig` + `configs/phase2_supervised.yaml`
-4. Implement `src/models/fk_classifier.py` — ViT-Small + classification head
-5. Implement `src/training/supervised_trainer.py` — standard cross-entropy training
-6. Train 30 epochs, evaluate Silhouette / contrast on pseudo-labels
-7. If Silhouette > 0.1, train full 100 epochs and proceed to Phase 3
-8. If Silhouette < 0.1, fall back to Option D (classical features)
+**Critical addition:** UMAP is inserted **before** HDBSCAN to preserve non-linear local and
+global structures that PCA would destroy.
+
+**Pipeline:**
+```
+Raw spectra → Feature extraction (Path A or B) → StandardScaler → UMAP → HDBSCAN → pseudo-labels
+```
+
+**UMAP parameters (start here, tune if needed):**
+- `n_neighbors`: 15 (balance local/global structure)
+- `min_dist`: 0.1 (tight clusters)
+- `n_components`: 5 (low enough for HDBSCAN density estimation, high enough to preserve structure)
+- `metric`: `euclidean`
+- `random_state`: fixed seed for reproducibility
+
+**HDBSCAN parameters (start here, tune if needed):**
+- `min_cluster_size`: 20–50 (prevent tiny clusters; ~2–5% of dataset)
+- `min_samples`: 5–10 (core point density)
+- `metric`: `euclidean`
+- `cluster_selection_method`: `eom` (excess of mass)
+
+**Outputs:**
+- `labels: ndarray[int]` of shape `(N,)` where `-1` = noise.
+- `probabilities: ndarray[float]` of shape `(N,)` — HDBSCAN membership probability (useful for
+  filtering borderline points).
+
+**Visualization requirements:**
+- UMAP 2D scatter plot colored by HDBSCAN label (noise in grey).
+- Annotate with Silhouette score (computed only on non-noise points).
+- Overlay 3–4 example spectra per cluster as inset thumbnails.
+
+---
+
+### 16.3 Noise Handling: Discard -1 Labels in Stage 1
+
+**Rule:** Do **not** train the classifier on HDBSCAN noise points (`label == -1`).
+
+**Rationale:**
+- Noise points are by definition ambiguous — they sit in low-density regions between clusters.
+- Training on noise forces the classifier to learn decision boundaries in uncertain regions,
+  degrading performance on core cluster members.
+- We will recover noise points later via pseudo-label expansion (§16.5).
+
+**Stage-1 dataset:**
+```python
+core_mask = labels != -1
+X_train = X[core_mask]          # features OR raw spectra, depending on classifier
+y_train = labels[core_mask]     # pseudo-labels
+```
+
+**Expected noise fraction:** 10–30% depending on HDBSCAN tightness. If >40%, relax
+`min_samples` or increase `min_cluster_size`.
+
+---
+
+### 16.4 Stage 1: Train Lightweight Classifier
+
+**Two classifier options (try both in parallel smoke tests, lock the winner):**
+
+#### Option C1: MLP on Engineered Features
+- **Input:** `X_pca` or `X_desc` (Path A or B features).
+- **Architecture:** `MLP: D_in → 256 → 128 → K` with ReLU + Dropout(0.2).
+- **Loss:** Cross-entropy.
+- **Pros:** Fast (~minutes), low VRAM, interpretable.
+- **Cons:** Cannot learn beyond the hand-crafted features.
+
+#### Option C2: Shallow CNN / CvT on Raw Spectra
+- **Input:** Raw preprocessed spectra `(1, 256, 256)`.
+- **Architecture:** 3–4 layer CNN with global average pooling → MLP → K logits,
+  OR a shallow CvT (2–3 blocks) from the Phase 0 CvT-MAE skeleton.
+- **Loss:** Cross-entropy.
+- **Pros:** Can learn features the engineer missed.
+- **Cons:** Slower, more VRAM, risk of overfitting to noisy pseudo-labels.
+
+**Training config (applies to both):**
+- `epochs`: 30 (smoke test) → 100 (full)
+- `lr`: 1e-4 (lower than VICReg; classification is more stable)
+- `weight_decay`: 0.05
+- `batch_size`: 32 (features are tiny; spectra use 16 with AMP)
+- `optimizer`: AdamW(fused=True)
+- `scheduler`: cosine decay with 10% warmup
+- `val_split`: 10% stratified hold-out from core points
+
+**Required modules:**
+- `src/models/pseudo_label_classifier.py` — `MLPClassifier` and/or `ShallowCNNClassifier`
+- `src/training/pseudo_label_trainer.py` — standard classification trainer with cross-entropy,
+  accuracy logging, and per-class precision/recall
+
+---
+
+### 16.5 Stage 2: Pseudo-Label Expansion
+
+**Goal:** Recover noise points (`label == -1`) by leveraging the trained classifier's confidence.
+
+**Procedure:**
+1. Run the Stage-1 trained classifier on **all** spectra (including noise).
+2. For each noise point, extract the softmax probability vector `p ∈ ℝ^K`.
+3. Compute `confidence = max(p)`.
+4. **Acceptance rule:** If `confidence > 0.90`, assign the argmax class as a pseudo-label.
+   Otherwise, keep as `-1` (permanent noise).
+5. **Safety check:** Reject labels that would create singletons or doubletons — if a cluster
+   would have <5 members after expansion, keep those points as noise to avoid unstable classes.
+
+**Expanded dataset:**
+```python
+expanded_mask = (labels == -1) & (confidence > 0.90) & (cluster_size_after_add >= 5)
+labels_expanded = labels.copy()
+labels_expanded[expanded_mask] = predicted_class[expanded_mask]
+```
+
+**Visualization:**
+- Before/after UMAP plots showing noise points (grey → colored if accepted, grey if rejected).
+- Histogram of confidence scores for noise points (should be bimodal: low = true noise, high = recoverable).
+
+---
+
+### 16.6 Stage 3: Final Retraining on Cleaned, Expanded Dataset
+
+1. Merge core labels + accepted pseudo-labels into `y_final`.
+2. Permanently discard any spectra still labeled `-1`.
+3. Retrain the classifier (same architecture as Stage 1) from scratch on the expanded dataset.
+4. Evaluate:
+   - Training / validation accuracy
+   - Silhouette score on the classifier's **penultimate layer** embeddings (this is the
+     critical metric for Phase 3 downstream)
+   - Intra-class vs. inter-class cosine similarity contrast
+   - Per-cluster confusion matrix
+
+**Success criteria for proceeding to Phase 3:**
+
+| Metric | Target | How to Verify |
+|--------|--------|---------------|
+| Validation accuracy | > 60% (above random for K clusters) | Logged per epoch |
+| Silhouette (penultimate layer) | > 0.10 | UMAP + Silhouette on val set |
+| Intra/inter contrast | > 1.5 | Similarity matrix plot |
+| VRAM peak | < 4.5 GB | `max_vram_mb` logged |
+| Pseudo-label purity | > 85% agreement between Stage 1 and Stage 3 on overlapping points | Confusion matrix diagonal dominance |
+
+If **all pass** → freeze classifier weights, extract penultimate-layer embeddings for all
+1,392 spectra, save as `embeddings_phase2c.npz`, proceed to Phase 3 (prototype clustering).
+
+If **Silhouette < 0.1 or contrast < 1.2** → fall back to **Option D** (classical features
++ UMAP + HDBSCAN, no learned classifier) and proceed to Phase 3.
+
+---
+
+### 16.7 Implementation Order
+
+Recommended sequence to minimize interdependencies and enable fast iteration:
+
+1. **`src/evaluation/features.py`**
+   - `extract_marginal_features()` (Path A)
+   - `extract_spectral_descriptors()` (Path B)
+   - `standardize_features()` helper
+   - Unit tests for descriptor invariants (e.g., centroid within axis bounds, skewness sign consistency)
+
+2. **`scripts/extract_pseudo_label_features.py`**
+   - CLI: load all `.npz` spectra → compute both feature sets → save `features_marginal.npz`,
+     `features_descriptors.npz`, and a manifest mapping spectrum_id → feature row index.
+
+3. **`scripts/cluster_pseudo_labels.py`**
+   - CLI: load features → StandardScaler → UMAP → HDBSCAN → save `pseudo_labels.npz`
+     (labels, probabilities, umap_embeddings, hdbscan object).
+   - Produce UMAP visualization with inset thumbnails per cluster.
+   - Report noise fraction, cluster count, Silhouette on core points.
+
+4. **`src/models/pseudo_label_classifier.py`**
+   - `MLPClassifier` (feature input)
+   - `ShallowCNNClassifier` (raw spectrum input)
+   - Unit tests: forward pass shapes, dropout active only in train mode.
+
+5. **`src/training/pseudo_label_trainer.py`**
+   - Standard classification trainer with accuracy, per-class metrics, and penultimate-layer
+     embedding extraction.
+   - Re-use AMP, gradient accumulation, and checkpoint patterns from `MAETrainer`.
+
+6. **`scripts/train_pseudo_label_classifier.py`**
+   - Stage-1 training: parse `--feature-path` or `--raw-spectra`, load pseudo-labels,
+     filter out `-1`, train classifier, save checkpoint.
+   - Dry-run mode: 2 epochs, tiny subset.
+
+7. **`scripts/expand_pseudo_labels.py`**
+   - Load Stage-1 checkpoint → predict on all spectra → apply confidence threshold →
+     save expanded labels → produce before/after UMAP plots.
+
+8. **`scripts/train_pseudo_label_classifier.py --stage2`**
+   - Stage-3 final retraining on expanded dataset.
+   - Extract and save penultimate-layer embeddings.
+
+9. **Smoke test + full run**
+   - Run end-to-end on both feature paths (marginal + descriptors).
+   - Compare Silhouette, contrast, and noise fraction.
+   - Lock the winning path and update `MODEL_CHANGELOG.md`.
+
+---
+
+### 16.8 Model Change Tracking
+
+Before the first clustering run, append a new section to `experiments/MODEL_CHANGELOG.md`:
+
+| Date | Model Version | Architecture Delta | Baseline Metric | New Metric | Metric Delta |
+|------|---------------|--------------------|-----------------|------------|--------------|
+| 2026-06-07 | phase2c-pseudo-v1 | Option C initiated. Path A (marginals+PCA) vs Path B (spectral descriptors). UMAP(n=5,neighbors=15)→HDBSCAN. Stage-1 MLP classifier. | N/A | TBD | N/A |
+
+After each stage completes, fill in metrics:
+- Stage 1: val_accuracy, Silhouette, contrast, noise_fraction
+- Stage 2: expansion_rate (fraction of -1 recovered), mean_confidence_of_accepted
+- Stage 3: final_val_accuracy, final_Silhouette, final_contrast
+
+---
+
+### 16.9 Experiment Log (Reserved)
+
+<!-- Append Option C experiment results below this line -->
 
