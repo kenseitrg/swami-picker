@@ -151,6 +151,10 @@ def main() -> None:
     train_transform = FKSpectrumTransform(
         noise_std=config.noise_std,
         intensity_jitter=config.intensity_jitter,
+        freq_shift_max=config.freq_shift_max,
+        waven_shift_max=config.waven_shift_max,
+        freq_dropout_prob=config.freq_dropout_prob,
+        freq_dropout_width=config.freq_dropout_width,
     )
 
     train_ds = FKDataset(

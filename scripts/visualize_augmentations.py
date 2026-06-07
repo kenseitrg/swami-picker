@@ -45,14 +45,38 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--noise-std",
         type=float,
-        default=0.05,
+        default=0.15,
         help="Gaussian noise std.",
     )
     parser.add_argument(
         "--intensity-jitter",
         type=float,
-        default=0.30,
+        default=0.50,
         help="Intensity jitter factor.",
+    )
+    parser.add_argument(
+        "--freq-shift-max",
+        type=float,
+        default=0.10,
+        help="Max frequency shift as fraction of width.",
+    )
+    parser.add_argument(
+        "--waven-shift-max",
+        type=float,
+        default=0.05,
+        help="Max wavenumber shift as fraction of height.",
+    )
+    parser.add_argument(
+        "--freq-dropout-prob",
+        type=float,
+        default=0.30,
+        help="Probability of frequency-band dropout.",
+    )
+    parser.add_argument(
+        "--freq-dropout-width",
+        type=float,
+        default=0.08,
+        help="Width of dropped band as fraction of width.",
     )
     parser.add_argument(
         "--seed",
@@ -92,6 +116,10 @@ def main() -> None:
     transform = FKSpectrumTransform(
         noise_std=args.noise_std,
         intensity_jitter=args.intensity_jitter,
+        freq_shift_max=args.freq_shift_max,
+        waven_shift_max=args.waven_shift_max,
+        freq_dropout_prob=args.freq_dropout_prob,
+        freq_dropout_width=args.freq_dropout_width,
     )
 
     apply_style()

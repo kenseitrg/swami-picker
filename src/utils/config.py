@@ -117,6 +117,10 @@ class FKMAEConfig:
     # Augmentation
     noise_std: float = 0.01
     intensity_jitter: float = 0.15
+    freq_shift_max: float = 0.0
+    waven_shift_max: float = 0.0
+    freq_dropout_prob: float = 0.0
+    freq_dropout_width: float = 0.05
 
     # Training
     batch_size: int = 2
