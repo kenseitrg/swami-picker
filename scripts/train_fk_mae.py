@@ -9,6 +9,10 @@ from datetime import datetime
 from pathlib import Path
 from typing import cast
 
+import matplotlib
+
+matplotlib.use("Agg")
+
 import torch
 from torch.utils.data import DataLoader
 

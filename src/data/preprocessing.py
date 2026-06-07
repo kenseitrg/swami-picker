@@ -294,8 +294,11 @@ def load_preprocessed_spectrum(
     if not json_path.exists():
         raise FileNotFoundError(f"Metadata file not found: {json_path}")
 
-    with np.load(npz_path) as npz:
+    npz = np.load(npz_path)
+    try:
         tensor = np.array(npz["tensor"])
+    finally:
+        npz.close()
 
     with open(json_path) as fh:
         metadata: dict[str, Any] = json.load(fh)

@@ -5,6 +5,9 @@ import logging
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
+import matplotlib as _mpl
+_mpl.use("Agg")
+
 import matplotlib as mpl
 import matplotlib.patches as mpatches
 import matplotlib.pyplot as plt
