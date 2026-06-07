@@ -590,3 +590,366 @@ def plot_loss_curves(
     save_figure(fig, save_path)
     plt.close(fig)
     logger.info("Saved loss curves to %s", save_path)
+
+
+def plot_fk_reconstruction_grid(
+    model: MAEType,
+    images: Tensor,
+    device: torch.device,
+    save_path: Path,
+    num_samples: int = 8,
+    seed: int = 42,
+) -> None:
+    """Generate a side-by-side reconstruction grid for FK spectra.
+
+    Shows input, masked input, and composite reconstruction for a
+    random subset of the provided FK spectra.
+
+    Args:
+        model: MAE model instance.
+        images: Image tensor of shape ``(B, C, H, W)``.
+        device: Device to run inference on.
+        save_path: Output figure path.
+        num_samples: Number of samples to display.
+        seed: Random seed for sample selection.
+    """
+    apply_style()
+    rng = np.random.default_rng(seed)
+    n = min(num_samples, len(images))
+    indices = rng.choice(len(images), size=n, replace=False)
+    imgs = images[indices].to(device)
+
+    model.eval()
+    with torch.no_grad():
+        loss, pred, mask = model(imgs)
+
+    recon = _composite_reconstruction(imgs, pred, mask, model).cpu()
+    masked = _create_masked_image(imgs.cpu(), mask.cpu(), model.patch_size)
+
+    fig, axes = plt.subplots(n, 3, figsize=(7, 2.2 * n))
+    if n == 1:
+        axes = axes.reshape(1, -1)
+
+    titles = ["Input", "Masked", "Composite"]
+    for row in range(n):
+        row_input = imgs[row, 0].cpu().numpy()
+        vmin, vmax = row_input.min(), row_input.max()
+        for col, tensor in enumerate([imgs.cpu(), masked, recon]):
+            ax = axes[row, col]
+            img = tensor[row, 0].numpy()
+            im = ax.imshow(img, cmap="viridis", vmin=vmin, vmax=vmax)
+            ax.axis("off")
+            if row == 0:
+                ax.set_title(titles[col])
+        # Shared colorbar per row
+        cbar_ax = fig.add_axes((0.92, 0.15 + (n - 1 - row) * (0.7 / n), 0.015, 0.5 / n))
+        fig.colorbar(im, cax=cbar_ax)
+
+    plt.tight_layout(rect=(0, 0, 0.90, 1))
+    save_figure(fig, save_path)
+    plt.close(fig)
+    logger.info("Saved FK reconstruction grid to %s", save_path)
+
+
+def plot_fk_umap(
+    model: MAEType,
+    loader: DataLoader,
+    device: torch.device,
+    save_path: Path,
+    max_samples: int = 2000,
+    seed: int = 42,
+    num_inset_examples: int = 4,
+) -> float | None:
+    """Generate a UMAP projection of FK encoder embeddings coloured by line.
+
+    Args:
+        model: MAE model instance.
+        loader: DataLoader yielding ``(images, metadata_dict)``.
+        device: Device to run inference on.
+        save_path: Output figure path.
+        max_samples: Maximum number of samples to embed.
+        seed: Random seed for UMAP.
+        num_inset_examples: Number of example spectra to show as insets
+            from distinct UMAP neighborhoods.
+
+    Returns:
+        Silhouette score (or ``None`` if UMAP is unavailable).
+    """
+    if not _UMAP_AVAILABLE:
+        logger.warning("UMAP not available; skipping FK UMAP plot.")
+        return None
+
+    apply_style()
+    model.eval()
+
+    all_embs: list[Tensor] = []
+    all_line_numbers: list[int] = []
+    all_images: list[Tensor] = []
+    total = 0
+
+    with torch.no_grad():
+        for images, metadata_batch in loader:
+            images = images.to(device)
+            embs = model.extract_embeddings(images)
+            all_embs.append(embs.cpu())
+            # metadata_batch is a list of dicts when using default collate
+            if isinstance(metadata_batch, list):
+                all_line_numbers.extend([m["line_number"] for m in metadata_batch])
+            else:
+                all_line_numbers.extend(metadata_batch.get("line_number", []))
+            all_images.append(images.cpu())
+            total += len(images)
+            if total >= max_samples:
+                break
+
+    if not all_embs:
+        logger.warning("Empty DataLoader; skipping FK UMAP plot.")
+        return None
+
+    embeddings = torch.cat(all_embs)[:max_samples].numpy()
+    line_numbers = np.array(all_line_numbers[:max_samples])
+    images_all = torch.cat(all_images)[:max_samples]
+
+    n_neighbors = min(15, len(embeddings) - 1)
+    if n_neighbors < 2:
+        logger.warning("Too few samples for UMAP; skipping FK UMAP plot.")
+        return None
+
+    reducer = umap.UMAP(random_state=seed, n_neighbors=n_neighbors, min_dist=0.1)
+    embedding_2d = reducer.fit_transform(embeddings)
+
+    unique_lines = np.unique(line_numbers)
+    n_lines = len(unique_lines)
+    sil_score: float | None = None
+    if n_lines >= 2:
+        try:
+            sil_score = silhouette_score(embeddings, line_numbers)
+        except ValueError:
+            sil_score = None
+
+    fig, ax = plt.subplots(figsize=(8, 6))
+    cmap = plt.cm.get_cmap("tab20", max(n_lines, 2))
+    scatter = ax.scatter(
+        embedding_2d[:, 0],
+        embedding_2d[:, 1],
+        c=line_numbers,
+        cmap=cmap,
+        s=12,
+        alpha=0.7,
+    )
+    ax.set_title("UMAP of MAE Encoder Embeddings (colored by receiver line)")
+    ax.set_xlabel("UMAP-1")
+    ax.set_ylabel("UMAP-2")
+    cbar = plt.colorbar(scatter, ax=ax)
+    cbar.set_label("Receiver Line")
+
+    if sil_score is not None:
+        ax.text(
+            0.02,
+            0.98,
+            f"Silhouette: {sil_score:.3f}",
+            transform=ax.transAxes,
+            verticalalignment="top",
+            bbox={"boxstyle": "round", "facecolor": "wheat", "alpha": 0.8},
+        )
+
+    # ── Inset examples from distinct neighborhoods ───────────────────
+    if num_inset_examples > 0 and len(images_all) > num_inset_examples:
+        # Simple k-means-like spatial partitioning for neighborhood selection
+        rng = np.random.default_rng(seed)
+        # Pick random points that are spatially separated
+        selected_indices: list[int] = []
+        candidates = list(range(len(embedding_2d)))
+        rng.shuffle(candidates)
+        min_dist = 0.0
+        if len(candidates) > 0:
+            # Use a fraction of the data range as minimum separation
+            x_range = embedding_2d[:, 0].max() - embedding_2d[:, 0].min()
+            y_range = embedding_2d[:, 1].max() - embedding_2d[:, 1].min()
+            min_dist = 0.15 * max(x_range, y_range)
+
+        for idx in candidates:
+            if len(selected_indices) >= num_inset_examples:
+                break
+            point = embedding_2d[idx]
+            far_enough = all(
+                np.linalg.norm(point - embedding_2d[si]) >= min_dist
+                for si in selected_indices
+            )
+            if far_enough or not selected_indices:
+                selected_indices.append(idx)
+
+        # Fill remaining slots if spatial separation failed
+        for idx in candidates:
+            if len(selected_indices) >= num_inset_examples:
+                break
+            if idx not in selected_indices:
+                selected_indices.append(idx)
+
+        inset_size = 0.18
+        inset_positions = [
+            (0.02, 0.02),
+            (0.80, 0.02),
+            (0.02, 0.80),
+            (0.80, 0.80),
+        ]
+        for i, idx in enumerate(selected_indices[:num_inset_examples]):
+            pos = inset_positions[i % len(inset_positions)]
+            inset_ax = fig.add_axes((pos[0], pos[1], inset_size, inset_size))
+            img = images_all[idx, 0].numpy()
+            inset_ax.imshow(img, cmap="viridis")
+            inset_ax.set_title(f"Line {line_numbers[idx]}", fontsize=7)
+            inset_ax.axis("off")
+
+    plt.tight_layout()
+    save_figure(fig, save_path)
+    plt.close(fig)
+    logger.info("Saved FK UMAP plot to %s", save_path)
+    return sil_score
+
+
+def plot_fk_similarity_matrix(
+    model: MAEType,
+    loader: DataLoader,
+    device: torch.device,
+    save_path: Path,
+    max_samples: int = 2000,
+    seed: int = 42,
+) -> dict[str, float] | None:
+    """Generate a cross-line cosine-similarity heat-map from encoder embeddings.
+
+    Args:
+        model: MAE model instance.
+        loader: DataLoader yielding ``(images, metadata_dict)``.
+        device: Device to run inference on.
+        save_path: Output figure path.
+        max_samples: Maximum number of samples to process.
+        seed: Random seed for sample selection.
+
+    Returns:
+        Dictionary with ``mean_intra``, ``mean_inter``, and ``contrast``,
+        or ``None`` if no samples were found.
+    """
+    apply_style()
+    model.eval()
+
+    all_embs: list[Tensor] = []
+    all_line_numbers: list[int] = []
+    total = 0
+
+    with torch.no_grad():
+        for images, metadata_batch in loader:
+            images = images.to(device)
+            embs = model.extract_embeddings(images)
+            all_embs.append(embs.cpu())
+            if isinstance(metadata_batch, list):
+                all_line_numbers.extend([m["line_number"] for m in metadata_batch])
+            else:
+                all_line_numbers.extend(metadata_batch.get("line_number", []))
+            total += len(images)
+            if total >= max_samples:
+                break
+
+    if not all_embs:
+        logger.warning("Empty DataLoader; skipping FK similarity matrix.")
+        return None
+
+    embeddings = torch.cat(all_embs)[:max_samples]  # (N, D)
+    line_numbers = np.array(all_line_numbers[:max_samples])
+
+    unique_lines = np.unique(line_numbers)
+    n_lines = len(unique_lines)
+    if n_lines < 2:
+        logger.warning("Fewer than 2 lines; skipping FK similarity matrix.")
+        return None
+
+    embeddings_norm = torch.nn.functional.normalize(embeddings, dim=1)
+    class_embs = {int(ln): embeddings_norm[line_numbers == ln] for ln in unique_lines}
+
+    sim_matrix = np.zeros((n_lines, n_lines), dtype=np.float64)
+    for i, li in enumerate(unique_lines):
+        for j, lj in enumerate(unique_lines):
+            if i > j:
+                sim_matrix[i, j] = sim_matrix[j, i]
+                continue
+            ei = class_embs[int(li)]
+            ej = class_embs[int(lj)]
+            sims = torch.mm(ei, ej.t())
+            sim_matrix[i, j] = sims.mean().item()
+
+    intra = np.diag(sim_matrix).mean()
+    mask_off = ~np.eye(n_lines, dtype=bool)
+    inter = sim_matrix[mask_off].mean()
+    contrast = intra / (inter + 1e-8)
+
+    fig = plt.figure(figsize=(10, 4.5))
+    gs = fig.add_gridspec(1, 2, width_ratios=[3.5, 1])
+
+    ax_mat = fig.add_subplot(gs[0, 0])
+    im = ax_mat.imshow(sim_matrix, cmap="RdYlGn", vmin=-1, vmax=1, aspect="auto")
+    ax_mat.set_xticks(np.arange(n_lines))
+    ax_mat.set_yticks(np.arange(n_lines))
+    line_labels = [str(int(ln)) for ln in unique_lines]
+    ax_mat.set_xticklabels(line_labels, rotation=45, ha="right")
+    ax_mat.set_yticklabels(line_labels)
+    ax_mat.set_xlabel("Receiver Line")
+    ax_mat.set_ylabel("Receiver Line")
+    ax_mat.set_title("Mean Cosine Similarity Between Embeddings (by Line)")
+
+    for i in range(n_lines):
+        for j in range(n_lines):
+            val = sim_matrix[i, j]
+            text_color = "white" if abs(val) > 0.65 else "black"
+            ax_mat.text(
+                j,
+                i,
+                f"{val:.3f}",
+                ha="center",
+                va="center",
+                color=text_color,
+                fontsize=6,
+            )
+
+    plt.colorbar(im, ax=ax_mat, fraction=0.046, pad=0.04, label="Cosine Similarity")
+
+    ax_summary = fig.add_subplot(gs[0, 1])
+    ax_summary.axis("off")
+    summary_text = (
+        f"Samples: {len(embeddings)}\n"
+        f"Lines: {n_lines}\n"
+        f"Embed dim: {embeddings.shape[1]}\n"
+        f"\n"
+        f"Mean intra-line sim:\n"
+        f"  {intra:.4f}\n"
+        f"Mean inter-line sim:\n"
+        f"  {inter:.4f}\n"
+        f"Contrast (intra/inter):\n"
+        f"  {contrast:.3f}"
+    )
+    ax_summary.text(
+        0.1,
+        0.5,
+        summary_text,
+        transform=ax_summary.transAxes,
+        verticalalignment="center",
+        fontfamily="monospace",
+        fontsize=10,
+        bbox={"boxstyle": "round", "facecolor": "wheat", "alpha": 0.8},
+    )
+
+    plt.tight_layout()
+    save_figure(fig, save_path)
+    plt.close(fig)
+    logger.info(
+        "Saved FK similarity matrix to %s (intra=%.4f, inter=%.4f, contrast=%.3f)",
+        save_path,
+        intra,
+        inter,
+        contrast,
+    )
+
+    return {
+        "mean_intra": float(intra),
+        "mean_inter": float(inter),
+        "contrast": float(contrast),
+    }

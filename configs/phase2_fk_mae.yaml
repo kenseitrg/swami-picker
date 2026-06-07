@@ -1,0 +1,47 @@
+# Phase 2: MAE Pretraining on FK Spectra
+# See PROJECT_PLAN.md §Phase 2 for rationale.
+
+# ── Data ──────────────────────────────────────────────────────────
+manifest_path: "data/processed/manifest.json"
+val_fraction: 0.10       # fraction of train-line spectra to hold out for val
+val_seed: 42             # seed for the random sub-split (independent of training)
+
+# ── Model ─────────────────────────────────────────────────────────
+# ViT-Small encoder + lightweight decoder (mirrors Phase 0 baseline)
+img_size: 256
+patch_size: 16
+in_channels: 1
+embed_dim: 384
+depth: 12
+num_heads: 6
+mlp_ratio: 4.0
+decoder_embed_dim: 256
+decoder_depth: 4
+decoder_num_heads: 8
+mask_ratio: 0.75
+use_block_masking: true
+block_size: 2
+
+# ── Augmentation ──────────────────────────────────────────────────
+# Applied on-the-fly to training split only
+noise_std: 0.01          # Gaussian noise std in normalized amplitude units
+intensity_jitter: 0.15   # relative scale factor U(1±jitter)
+
+# ── Training ──────────────────────────────────────────────────────
+batch_size: 2
+accum_steps: 8           # effective batch = 16 (conservative for RTX 3060)
+epochs: 30
+lr: 5.0e-05              # scaled for smaller effective batch vs Phase 0
+weight_decay: 0.05
+betas: [0.9, 0.95]
+warmup_ratio: 0.1
+grad_clip_norm: 1.0
+seed: 42
+
+# ── System ────────────────────────────────────────────────────────
+num_workers: 4
+pin_memory: true
+
+# ── Logging ───────────────────────────────────────────────────────
+log_interval: 50
+visualization_epochs: [5, 10, 20, 30]

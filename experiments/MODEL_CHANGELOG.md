@@ -16,4 +16,6 @@ Every modification to model architecture, loss formulation, or data augmentation
 
 | 2026-06-05 | phase0-mnist-cvt-mae | CvT-MAE hybrid: ViT-small encoder replaced with CvT blocks (depth-wise conv projections for Q/K/V, kernel_size=3). Encoder processes full token grid with learnable mask tokens for masked positions; only visible tokens passed to decoder. Block masking 75%, 5 epochs. | val_loss=0.271, Silhouette=0.18, contrast=3.701 (ViT-MAE baseline) | val_loss=0.198, Silhouette=0.032, contrast=1.072, VRAM=2047MB | val_loss=-0.073, Silhouette=-0.148, contrast=-2.629 |
 
+| 2026-06-07 | phase2-fk-mae-v1 | Phase 0 ViT-MAE transferred to FK data. Aug: Gaussian noise (std=0.01) + intensity jitter (±15%). Val split: 120 phase-1 val + 10% random from train lines. Epochs=30. | N/A | TBD | N/A |
+
 <!-- Append new entries above this line -->

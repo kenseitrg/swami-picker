@@ -25,6 +25,7 @@ class FKDataset(Dataset):
         manifest_path: Path,
         split: str = "train",
         transform: Callable | None = None,
+        entries: list[dict[str, Any]] | None = None,
     ) -> None:
         """Load preprocessed FK spectra from manifest.
 
@@ -32,23 +33,30 @@ class FKDataset(Dataset):
             manifest_path: Path to manifest.json produced by preprocessing script.
             split: "train" or "val".
             transform: Optional callable applied to the tensor.
+            entries: Optional pre-filtered entry list. When provided,
+                ``split`` is ignored and these entries are used directly.
+                This allows programmatic train/val splits (e.g. the
+                expanded validation set from :func:`create_train_val_entries`).
         """
         self.manifest_path = Path(manifest_path)
         self.split = split
         self.transform = transform
 
-        if split not in {"train", "val"}:
-            msg = f"split must be 'train' or 'val', got '{split}'"
-            raise ValueError(msg)
+        if entries is not None:
+            self.entries = entries
+        else:
+            if split not in {"train", "val"}:
+                msg = f"split must be 'train' or 'val', got '{split}'"
+                raise ValueError(msg)
 
-        with open(self.manifest_path) as fh:
-            manifest: dict[str, Any] = json.load(fh)
+            with open(self.manifest_path) as fh:
+                manifest: dict[str, Any] = json.load(fh)
 
-        self.entries = [
-            entry
-            for entry in manifest.get("spectra", [])
-            if entry.get("split") == split
-        ]
+            self.entries = [
+                entry
+                for entry in manifest.get("spectra", [])
+                if entry.get("split") == split
+            ]
 
         # Resolve base directory from manifest path so npz/json paths are relative to it.
         self.base_dir = self.manifest_path.parent

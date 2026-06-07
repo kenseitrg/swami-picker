@@ -21,7 +21,9 @@ from src.utils.checkpoint import load_checkpoint, save_checkpoint
 if TYPE_CHECKING:
     from src.models.cvt_mae import CvTMaskedAutoencoder
     from src.models.mae import MaskedAutoencoder
-    from src.utils.config import MNISTConfig
+    from src.utils.config import FKMAEConfig, MNISTConfig
+
+    ConfigType = MNISTConfig | FKMAEConfig
 
 logger = logging.getLogger(__name__)
 
@@ -58,7 +60,7 @@ class MAETrainer:
     def __init__(
         self,
         model: MaskedAutoencoder | CvTMaskedAutoencoder,
-        config: MNISTConfig,
+        config: ConfigType,
         device: torch.device,
         train_loader: DataLoader,
         val_loader: DataLoader,
