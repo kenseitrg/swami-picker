@@ -295,7 +295,7 @@ def load_preprocessed_spectrum(
         raise FileNotFoundError(f"Metadata file not found: {json_path}")
 
     with np.load(npz_path) as npz:
-        tensor = npz["tensor"]
+        tensor = np.array(npz["tensor"])
 
     with open(json_path) as fh:
         metadata: dict[str, Any] = json.load(fh)
