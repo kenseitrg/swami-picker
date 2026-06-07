@@ -1,9 +1,9 @@
-# Phase 2: MAE Pretraining on FK Spectra — Implementation TODO
+# Phase 2: Self-Supervised Pretraining on FK Spectra — Implementation TODO
 
-> **Status:** Ready to start  
+> **Status:** ❌ MAE exhausted — switching to **VICReg**  
 > **Depends on:** Phase 0 (✅), Phase 1 (✅)  
-> **Hardware target:** RTX 3060, 6 GB VRAM  
-> **Epoch budget (first run):** 30
+> **Hardware target:** RTX 3060, 6 GB VRAM
+> **Lessons learned:** MAE reconstruction objective fails for homogeneous FK spectra (embedding collapse in all 3 experiments). VICReg is the primary alternative.
 
 ---
 
@@ -13,12 +13,14 @@
 
 | Decision | Choice | Rationale |
 |----------|--------|-----------|
-| **Encoder architecture** | Re-use `MaskedAutoencoder` (ViT-Small) from Phase 0 as-is | FK spectra are already 256×256 single-channel; identical input shape. No need to change patch size, embed_dim, depth, or decoder. |
-| **Config strategy** | New `FKMAEConfig` dataclass | Keeps Phase 0 configs untouched; avoids conditional fields for MNIST vs FK. |
-| **Augmentation scope (initial)** | Gaussian/Poisson noise + intensity jitter only | Per user direction. Frequency/wavenumber shift and block masking deferred to a later iteration. |
-| **Validation split** | Phase 1 val lines (120 spectra) + 10 % random from train lines (~127) | Increases val size to ~247 for more robust convergence signal while preserving geographic holdout. |
-| **Trainer pattern** | Subclass `MAETrainer` → `FKMAETrainer` | Core loop (AMP, grad-accum, clipping, scheduler) is identical. Override only visualization and add tqdm. Phase 0 script continues to work unchanged. |
-| **Embedding extraction** | Mean-pooled encoder output (as-is) | Phase 0 achieved contrast 3.70 with mean pooling. Revisit CLS token only if Phase 3 clustering under-performs. |
+| **MAE approach** | ❌ Abandoned after 3 experiments | All variants (block/random masking, 75%-25% ratios, aggressive augmentations) produced embedding collapse (Silhouette < 0, contrast < 1.1). Reconstruction loss is fundamentally insufficient for homogeneous FK data. |
+| **New approach** | **VICReg** (Variance-Invariance-Covariance Regularization) | Explicitly prevents collapse via variance regularization. No reconstruction head. Works at batch_size=2. ~150 lines of code. |
+| **Encoder architecture** | Re-use ViT-Small encoder from Phase 0 (without decoder head) | Already proven to have sufficient capacity. VICReg uses encoder + projector MLP instead of encoder + decoder. |
+| **Config strategy** | New `VICRegConfig` dataclass (or extend `FKMAEConfig`) | Separate config from MAE. Requires: embedding_dim, projector_hidden_dims, loss weights (λ, µ, ν), augmentation params. |
+| **Augmentation scope** | Same aggressive augmentations from MAE v3 | freq_shift, waven_shift, freq_dropout, noise, intensity jitter — all transfer directly. VICReg *requires* at least 2 different augmented views per sample. |
+| **Validation split** | Same as Phase 2 (120 phase-1 val + 10% random from train) | No change needed. |
+| **Trainer pattern** | New `VICRegTrainer` | No decoder, no masking, no reconstruction loss. Different loss computation (invariance + variance + covariance). |
+| **Embedding extraction** | Projector output (or encoder output before projector) | VICReg uses encoder + projector; typically the projector output is used as the embedding, but encoder output before projection also works. |
 
 ### Reuse from Phase 0 (no changes)
 
@@ -328,9 +330,200 @@ After the run completes, fill in the metric columns with the best val_loss, Silh
 
 ---
 
-## 11. Open Questions to Revisit
+---
 
-- **Normalization ablation:** After this run, compare min-max vs z-score on reconstruction loss (carried over from Phase 1 TODO).
-- **Frequency/wavenumber shift augmentation:** Defer to Phase 2 iteration 2; requires careful coordinate tracking if we want to use shifted spectra for supervised picking later.
-- **Effective batch size:** Current plan is eff. batch 16 (`batch=2, accum=8`). If convergence is slow, try eff. batch 32 (`batch=2, accum=16`) on a short run and compare.
-- **Encoder freezing for Phase 3:** Decide whether to freeze the entire encoder or only the earlier layers during prototype clustering. Document the decision when Phase 3 TODO is written.
+## 11. Experiment Log
+
+### v1 — 2026-06-07: Baseline (block masking 75%, 30 epochs)
+
+| Setting | Value |
+|---------|-------|
+| `mask_ratio` | 0.75 |
+| `use_block_masking` | true |
+| `noise_std` | 0.05 |
+| `intensity_jitter` | 0.30 |
+| `epochs` | 30 |
+| `min_lr` | 5e-6 (min_lr_ratio=0.1) |
+
+**Outcome:** ❌ Embedding collapse. Silhouette = −0.322, contrast = 1.078 (intra=0.876, inter=0.812).
+UMAP: ring structure with mixed lines. Loss plateaued at ~0.08 by epoch 10.
+
+### v2 — 2026-06-07: Random masking 50% (30 epochs)
+
+| Setting | Value |
+|---------|-------|
+| `mask_ratio` | 0.50 |
+| `use_block_masking` | false |
+| `noise_std` | 0.05 |
+| `intensity_jitter` | 0.30 |
+| `epochs` | 30 |
+| `min_lr` | 5e-6 |
+
+**Outcome:** ❌ Marginal improvement. Val loss 0.075 (vs 0.084 in v1), but Silhouette still negative,
+contrast ~1.08. Embedding collapse persists.
+
+### v3 — 2026-06-07: Aggressive aug + 25% masking + 100 epochs (stopped at epoch 54)
+
+| Setting | Value |
+|---------|-------|
+| `mask_ratio` | 0.25 |
+| `use_block_masking` | false |
+| `noise_std` | 0.15 |
+| `intensity_jitter` | 0.50 |
+| `freq_shift_max` | 0.10 |
+| `waven_shift_max` | 0.05 |
+| `freq_dropout_prob` | 0.30 |
+| `epochs` | 100 (stopped at epoch 54) |
+| `min_lr` | 1e-6 (min_lr_ratio=0.02) |
+
+**Outcome:** ❌ No meaningful improvement at epoch 50. Val loss = 0.0945 at epoch 54
+(still higher than v2's 0.0747 at epoch 30). Embedding collapse persists — Silhouette
+still negative, contrast ~1.08. MAE definitively fails for FK spectra.
+
+**Diagnosis:** The pixel-level reconstruction objective is fundamentally unsuitable for
+FK spectra. All samples share the same global structure (dark field + diagonal dispersion
+modes), making the "average spectrum" a low-loss reconstruction strategy regardless of
+masking ratio or augmentation strength. Encoder embeddings collapse because the model
+does not need to distinguish samples to minimize the reconstruction loss.
+
+---
+
+## 12. VICReg Implementation Plan
+
+### Overview
+
+VICReg learns embeddings by maximizing agreement between two augmented views of
+the same spectrum while explicitly preventing collapse via variance and covariance
+regularization. No reconstruction, no negative pairs, no memory bank.
+
+**Loss:** L = λ·s(Z, Z′) + µ·v(Z) + ν·c(Z)
+- **Invariance** s(Z, Z′): MSE between augmented-view embeddings
+- **Variance** v(Z): hinge loss keeping std(Z[:,j]) ≥ 1 for each feature j
+- **Covariance** c(Z): sum of squared off-diagonal elements of the covariance matrix
+
+### Files to Create/Modify
+
+| File | Action | Purpose |
+|------|--------|---------|
+| `src/models/vicreg.py` | **New** | VICReg model: encoder (ViT-Small) + projector MLP + loss computation |
+| `src/training/vicreg_trainer.py` | **New** | VICRegTrainer (builds on MAETrainer base class) |
+| `src/utils/config.py` | Modify | Add `VICRegConfig` dataclass |
+| `configs/phase2_vicreg.yaml` | **New** | Default VICReg config |
+| `scripts/train_vicreg.py` | **New** | CLI entry point for VICReg training |
+| `src/evaluation/visualize.py` | Modify | Reuse FK visualization functions (UMAP, similarity matrix) |
+
+### VICReg Model (`src/models/vicreg.py`)
+
+```python
+class VICReg(nn.Module):
+    """VICReg self-supervised learning model.
+
+    Architecture:
+        Input ──► Encoder (ViT-Small, no decoder) ──► Projector MLP ──► Embedding
+
+    The encoder is the same ViT-Small from Phase 0 MAE (without the decoder).
+    The projector is a 3-layer MLP (embed_dim → 2048 → 2048 → 2048) with BN + ReLU.
+    """
+```
+
+**Loss computation:**
+```python
+def vicreg_loss(z1, z2, sim_weight=25.0, var_weight=25.0, cov_weight=1.0):
+    # Invariance: MSE between the two views
+    inv_loss = F.mse_loss(z1, z2)
+
+    # Variance: hinge loss to keep std ≥ 1
+    std_z1 = torch.sqrt(z1.var(dim=0) + 1e-4)
+    std_z2 = torch.sqrt(z2.var(dim=0) + 1e-4)
+    var_loss = torch.mean(F.relu(1.0 - std_z1)) + torch.mean(F.relu(1.0 - std_z2))
+
+    # Covariance: off-diagonal regularization
+    z1_centered = z1 - z1.mean(dim=0)
+    z2_centered = z2 - z2.mean(dim=0)
+    cov_z1 = (z1_centered.T @ z1_centered) / (z1.size(0) - 1)
+    cov_z2 = (z2_centered.T @ z2_centered) / (z2.size(0) - 1)
+    cov_loss = (cov_z1.pow(2).sum() - cov_z1.diag().pow(2).sum()) / z1.size(1)
+    cov_loss += (cov_z2.pow(2).sum() - cov_z2.diag().pow(2).sum()) / z2.size(1)
+
+    return sim_weight * inv_loss + var_weight * var_loss + cov_weight * cov_loss
+```
+
+### Augmentation
+
+Reuse `FKSpectrumTransform` with the aggressive params from MAE v3.
+Each training step: draw 2 different augmentations of the same sample
+(by calling the transform twice with different random seeds).
+
+### Training Configuration (Initial Guess)
+
+| Parameter | Value | Rationale |
+|-----------|-------|-----------|
+| Encoder | ViT-Small (same as Phase 0) | Proven architecture, reuse weights |
+| Projector | 3× MLP: 384 → 2048 → 2048 → 2048 | Standard VICReg design |
+| Embedding dim | 2048 | Matches projector output; can be reduced later |
+| λ (sim_weight) | 25.0 | From VICReg paper (ImageNet) |
+| µ (var_weight) | 25.0 | From VICReg paper |
+| ν (cov_weight) | 1.0 | From VICReg paper |
+| Batch size | 16 | VICReg benefits from larger batches for variance computation |
+| Epochs | 100 | Matches MAE v3 schedule |
+| Optimizer | AdamW, LR=3e-4 | Standard VICReg uses SGD but AdamW is more stable |
+| LR schedule | Cosine decay, warmup 10% | Same as MAE |
+| Weight decay | 1e-6 | Light decay (VICReg paper uses no decay) |
+
+### Trainer (`src/training/vicreg_trainer.py`)
+
+Subclass `MAETrainer` with VICReg-specific overrides:
+- `_train_epoch`: For each batch, generate 2 augmentations, forward through encoder+projector, compute VICReg loss
+- `_validate`: Run encoder on val set (no augmentation), extract embeddings via `model.encoder.extract_embeddings()` (mean pool)
+- `_run_visualization`: Same as FK trainer — UMAP, similarity matrix, Silhouette
+
+**Note:** VICReg needs batch_size ≥ 16 for stable variance computation. If VRAM doesn't fit
+batch=16 with ViT-Small, use gradient accumulation (batch=2, accum=8) or reduce projector size.
+
+### VRAM Estimation
+
+- ViT-Small encoder forward: ~2× MAE (two views) = ~500 MB × 2 = ~1 GB
+- Projector MLP: negligible (~10 MB)
+- Total: ~1.5 GB for batch=16 (well within 6 GB limit)
+
+### Success Criteria
+
+Same as MAE Phase 2, updated for VICReg:
+
+| Check | Target | How to Verify |
+|-------|--------|---------------|
+| Training stability | Loss trends down over epochs | `metrics.jsonl` + loss curve |
+| Embedding structure | UMAP shows separable clusters by line_number | Manual review at epoch 10, 25, 50, 100 |
+| Silhouette score | > 0.1 (positive) | Logged at each visualization epoch |
+| Intra/inter contrast | > 1.5 | Similarity matrix plot |
+| VRAM | < 4.5 GB | `max_vram_mb` logged |
+
+### Fallback: BYOL (if VICReg Silhouette < 0.1)
+
+If VICReg fails to produce positive Silhouette, switch to BYOL:
+- Online encoder (ViT-Small) + projector (MLP: 384→2048→2048→2048) + predictor (MLP: 2048→512→2048)
+- Target encoder: EMA copy of online (τ=0.996)
+- Loss: negative cosine similarity between predictor output and target embedding
+- Batch size: as low as 2 (BYOL works at very small batches)
+
+**Code estimate:** ~200 lines. `src/models/byol.py` + `src/training/byol_trainer.py`.
+
+### Final Fallback: Classical Feature Extraction
+
+If neither VICReg nor BYOL produces meaningful clusters:
+1. Flatten all 1145 spectra → PCA (50-200 components) → UMAP → HDBSCAN
+2. Or use spectral descriptors: peak frequency locations, mode bandwidth, energy distribution
+3. Proceed directly to Phase 3 (clustering) with classical features
+
+---
+
+## 13. Implementation Order (VICReg)
+
+1. `src/models/vicreg.py` — VICReg model + loss function
+2. `src/utils/config.py` — `VICRegConfig` dataclass
+3. `configs/phase2_vicreg.yaml` — default config
+4. `src/training/vicreg_trainer.py` — trainer subclass
+5. `scripts/train_vicreg.py` — CLI entry point
+6. Update `experiments/MODEL_CHANGELOG.md` — new entry for VICReg
+7. Smoke test (2 epochs, small batch) — verify loss trends down
+8. Full 100-epoch run

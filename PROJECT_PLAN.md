@@ -107,28 +107,103 @@ metadata = {
 
 ---
 
-## 🧠 Phase 2: MAE Pretraining (Unsupervised)
-### Architecture
-- **Encoder**: ViT-Small or medium (`patch_size=16`, `embed_dim=384`, `depth=12`)
-- **Decoder**: Lightweight structure to ensure that encoder embeddings are meaningfull
-- **Masking**: 70–75% ratio, **block masking** (2×2 patch groups) preferred over random
+## 🧠 Phase 2: Self-Supervised Pretraining (Unsupervised)
 
-### Training Configuration
-| Hyperparameter | Value | Rationale |
-|----------------|-------|-----------|
-| Optimizer | `AdamW (fused=True)` | Decoupled weight decay, VRAM efficient |
-| Peak LR | `5e-5` to `1e-4` | Scaled by effective batch size |
-| LR Schedule | 10% linear warmup → cosine decay to 10% of peak | Stabilizes early training, prevents Norm stat freeze |
-| Betas | `(0.9, 0.95)` | Lower `β₂` handles high-masking gradient noise |
-| Weight Decay | `0.05` | Prevents overfitting to spectral noise |
-| Batch Size | `1–2` + gradient accumulation (steps=8–16) | Fits within 6GB VRAM |
-| Precision | `torch.amp.autocast("cuda")` + `GradScaler` | ~40% memory reduction, ~1.5× speedup |
-| Gradient Clip | `L2 norm = 1.0` | Prevents early divergence |
+### ⚠️ MAE Experiment — Failed (Abandoned)
 
-### Validation & Checkpointing
-- Save best model by validation reconstruction loss + embedding cluster purity
-- Log every 5 epochs: loss curves, UMAP projection of validation embeddings, approximate Silhouette score
-- Target convergence: 30–50 epochs (~2–4 hours on RTX 3060)
+Three MAE variants were tested. **All produced embedding collapse** (Silhouette < 0,
+contrast < 1.1), conclusively demonstrating that the pixel-level reconstruction
+objective is unsuitable for FK spectra:
+
+| Experiment | Setting | Val Loss | Silhouette | Verdict |
+|-----------|---------|----------|------------|---------|
+| v1 (baseline) | Block masking 75%, 30 epochs | 0.084 | −0.322 | ❌ Collapse |
+| v2 (random) | Random masking 50%, 30 epochs | 0.075 | ~−0.3 | ❌ Collapse |
+| v3 (aggressive) | Aggressive aug, masking 25%, 100 ep (stopped @54) | 0.095 | ~−0.3 | ❌ Collapse |
+
+**Root cause:** All FK spectra share the same global structure (dark field + diagonal
+dispersion bands). The MAE can trivially minimize MSE by predicting the "average
+spectrum" for every masked patch, never needing to distinguish samples. Encoder
+embeddings become degenerate.
+
+---
+
+### Primary Approach: VICReg (Current)
+
+**Paper:** Bardes et al., "VICReg: Variance-Invariance-Covariance Regularization for
+Self-Supervised Learning", ICLR 2022.
+
+VICReg replaces the reconstruction objective with three explicit regularizers that
+force the embedding space to be informative:
+1. **Invariance** — two augmented views of the same spectrum have similar embeddings
+2. **Variance** — each embedding dimension has std ≥ 1 across the batch (hinge loss)
+3. **Covariance** — embedding dimensions are decorrelated (off-diagonal → 0)
+
+**Why this should work for FK (where MAE failed):**
+- No reconstruction head → model cannot cheat by predicting average pixels
+- Variance term explicitly prevents dimensional collapse (MAE's failure mode)
+- Invariance term forces the model to learn *what stays the same* across augmentations
+  — i.e., the underlying spectrum identity, not the noise
+- No decoder needed → faster training, lower VRAM
+
+#### Architecture
+```
+Input ─── Aug A ──► Encoder (ViT-Small, shared) ──► Projector MLP ──► Z₁
+         Aug B ──► Encoder (ViT-Small, shared) ──► Projector MLP ──► Z₂
+
+L = λ · MSE(Z₁, Z₂)                    (invariance)
+  + µ · Σⱼ max(0, 1 − √Var(Zⱼ))        (variance, per-feature)
+  + ν · Σᵢ≠ⱼ C[i,j]² / D              (covariance, C = cov matrix of Z)
+```
+
+#### Configuration
+| Parameter | Value | Rationale |
+|-----------|-------|-----------|
+| Encoder | ViT-Small (same as Phase 0, no decoder head) | Reuse proven architecture |
+| Projector | 3× MLP: 384 → 2048 → 2048 → 2048 + BN + ReLU | Standard VICReg design |
+| Embedding dim | 2048 | Matches projector output |
+| λ (sim_weight) | 25.0 | VICReg paper defaults |
+| µ (var_weight) | 25.0 | VICReg paper defaults |
+| ν (cov_weight) | 1.0 | VICReg paper defaults |
+| Batch size | 16 (or batch=2 + accum=8) | Larger batches stabilize variance estimate |
+| Optimizer | AdamW, LR=3e-4, cosine decay, 10% warmup | Standard schedule |
+| Augmentations | Same aggressive pipeline as MAE v3 | Already developed and tested |
+| Epochs | 100 | Matches MAE v3 schedule |
+
+#### Success Criteria
+| Metric | Target | How to Verify |
+|--------|--------|---------------|
+| Silhouette score | > 0.1 | Logged at visualization epochs |
+| Intra/inter contrast | > 1.5 | Similarity matrix plot |
+| UMAP structure | Separable by line_number | Manual plot review |
+| VRAM | < 4.5 GB | `max_vram_mb` logged |
+
+---
+
+### Fallback: BYOL (if VICReg Silhouette < 0.1)
+
+**Paper:** Grill et al., "Bootstrap Your Own Latent", NeurIPS 2020.
+
+Uses an online–target network pair (EMA update of target). The online network must
+predict the target's embedding of a differently augmented view, creating a stable
+learning signal. Works at very small batch sizes.
+
+#### Architecture
+```
+View 1 ──► Online encoder ──► Projector ──► Predictor ──► Prediction q
+View 2 ──► Target encoder ──► Projector ──────────────────► Target z (stop-grad)
+                   ▲ EMA: θ_target ← τ·θ_target + (1−τ)·θ_online
+Loss = 2 − 2·(q·z) / (||q||·||z||)  (negative cosine similarity)
+```
+
+---
+
+### Final Fallback: Classical Feature Extraction
+
+If all learned approaches fail:
+- Flatten spectra → PCA (50–200 components) → HDBSCAN clustering
+- Or use spectral descriptors (peak frequencies, mode bandwidth, energy distribution)
+- This sacrifices the learned representation benefits but provides a working pipeline
 
 ---
 
