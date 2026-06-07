@@ -15,7 +15,7 @@ from pathlib import Path
 import torch
 from torch.utils.data import DataLoader
 
-sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 
 from src.data.augmentations import FKSpectrumTransform
 from src.data.fk_dataset import FKDataset

@@ -6,7 +6,7 @@ from collections.abc import Sized
 from pathlib import Path
 from typing import cast
 
-sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 
 from src.data.mnist_dataset import create_mnist_dataloaders, verify_batch_shape
 from src.utils.config import MNISTConfig

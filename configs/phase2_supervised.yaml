@@ -1,0 +1,37 @@
+# Phase 2C: Supervised pseudo-label classifier configuration
+# Trains a lightweight classifier on HDBSCAN pseudo-labels.
+
+# Data paths
+manifest_path: "data/processed/manifest.json"
+pseudo_labels_path: "data/processed/pseudo_labels.npz"
+feature_path: "data/processed/features/features_marginal.npz"
+
+# Model selection
+#   true  -> MLPClassifier on pre-extracted features (fast, low VRAM)
+#   false -> ShallowCNNClassifier on raw spectra (can learn missed patterns)
+use_features: true
+
+# MLP architecture (used when use_features=true)
+mlp_hidden_dims: [256, 128]
+mlp_dropout: 0.2
+
+# CNN architecture (used when use_features=false)
+cnn_dropout: 0.2
+
+# Training
+batch_size: 32
+accum_steps: 1
+epochs: 30
+lr: 1.0e-4
+weight_decay: 0.05
+betas: [0.9, 0.95]
+warmup_ratio: 0.1
+grad_clip_norm: 1.0
+seed: 42
+
+# System
+num_workers: 4
+pin_memory: true
+
+# Logging
+log_interval: 50

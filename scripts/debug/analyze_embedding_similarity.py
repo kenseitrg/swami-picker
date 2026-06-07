@@ -23,7 +23,7 @@ from typing import cast
 
 import torch
 
-sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 
 from src.data.mnist_dataset import create_mnist_dataloaders
 from src.evaluation.visualize import plot_embedding_similarity_matrix

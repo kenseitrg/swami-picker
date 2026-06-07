@@ -243,15 +243,12 @@ class VICRegConfig:
 
     # Logging
     log_interval: int = 50
-    visualization_epochs: list[int] = field(
-        default_factory=lambda: [10, 25, 50, 100]
-    )
+    visualization_epochs: list[int] = field(default_factory=lambda: [10, 25, 50, 100])
 
     def to_dict(self) -> dict[str, Any]:
         """Serialize config to a plain dictionary."""
         return {
-            k: str(v) if isinstance(v, Path) else v
-            for k, v in asdict(self).items()
+            k: str(v) if isinstance(v, Path) else v for k, v in asdict(self).items()
         }
 
     @classmethod
@@ -265,6 +262,83 @@ class VICRegConfig:
 
         if "betas" in raw and isinstance(raw["betas"], list):
             raw["betas"] = tuple(raw["betas"])
+
+        known = {f.name for f in cls.__dataclass_fields__.values()}
+        unknown = set(raw) - known
+        if unknown:
+            raise TypeError(f"Unexpected config keys: {unknown}")
+
+        return cls(**raw)
+
+    def save_yaml(self, path: Path) -> None:
+        """Save configuration to a YAML file."""
+        path.parent.mkdir(parents=True, exist_ok=True)
+        with open(path, "w") as fh:
+            yaml.safe_dump(
+                self.to_dict(),
+                fh,
+                default_flow_style=False,
+                sort_keys=False,
+            )
+
+
+@dataclass
+class PseudoLabelConfig:
+    """Configuration for supervised pseudo-label classifier training (Option C).
+
+    Supports both MLP (feature-input) and CNN (raw-spectrum-input) classifiers.
+    """
+
+    # Data
+    manifest_path: str = "data/processed/manifest.json"
+    pseudo_labels_path: str = "data/processed/pseudo_labels.npz"
+    feature_path: str = "data/processed/features/features_marginal.npz"
+    use_features: bool = True  # True = MLP on features, False = CNN on raw spectra
+
+    # Model (MLP)
+    mlp_hidden_dims: list[int] = field(default_factory=lambda: [256, 128])
+    mlp_dropout: float = 0.2
+
+    # Model (CNN)
+    cnn_dropout: float = 0.2
+
+    # Training
+    batch_size: int = 32
+    accum_steps: int = 1
+    epochs: int = 30
+    lr: float = 1e-4
+    weight_decay: float = 0.05
+    betas: tuple[float, float] = (0.9, 0.95)
+    warmup_ratio: float = 0.1
+    grad_clip_norm: float = 1.0
+    seed: int = 42
+
+    # System
+    num_workers: int = 4
+    pin_memory: bool = True
+
+    # Logging
+    log_interval: int = 50
+
+    def to_dict(self) -> dict[str, Any]:
+        """Serialize config to a plain dictionary."""
+        return {
+            k: str(v) if isinstance(v, Path) else v for k, v in asdict(self).items()
+        }
+
+    @classmethod
+    def from_yaml(cls, path: Path) -> PseudoLabelConfig:
+        """Load configuration from a YAML file."""
+        if not path.exists():
+            raise FileNotFoundError(f"Config file not found: {path}")
+
+        with open(path) as fh:
+            raw: dict[str, Any] = yaml.safe_load(fh)
+
+        if "betas" in raw and isinstance(raw["betas"], list):
+            raw["betas"] = tuple(raw["betas"])
+        if "mlp_hidden_dims" in raw and isinstance(raw["mlp_hidden_dims"], list):
+            raw["mlp_hidden_dims"] = list(raw["mlp_hidden_dims"])
 
         known = {f.name for f in cls.__dataclass_fields__.values()}
         unknown = set(raw) - known

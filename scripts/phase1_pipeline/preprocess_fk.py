@@ -12,7 +12,7 @@ from typing import Any
 import matplotlib.pyplot as plt
 
 # Ensure project src is on path when script is run directly.
-sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 
 from src.data.preprocessing import (
     FKPipelineConfig,
