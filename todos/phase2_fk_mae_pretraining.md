@@ -860,3 +860,130 @@ After each stage completes, fill in metrics:
 
 **Decision:** ✅ Locked as the clustering front-end for Stage-1 classifier training.
 
+---
+
+## 17. CNN on Raw Spectra — Planned Experiments
+
+### 17.1 Rationale
+
+The MLP classifier on 20-D descriptors (§16.4) has already met all formal success criteria
+(val_acc ~74 %, Silhouette ~0.17 UMAP / 0.38 cosine, contrast ~1.62).  However, the MLP
+*cannot* learn features beyond the hand-crafted descriptors.  A shallow CNN operating on raw
+256×256 spectra is the next logical step — it may discover subtle visual patterns (e.g.
+interference fringes, mode-crossing geometries, noise-floor textures) that the 20-D
+feature vector discards.
+
+### 17.2 Label Set: 11 Merged Clusters (Not 5)
+
+| Setup | Clusters | Largest:Smallest | Why Use It |
+|-------|----------|------------------|------------|
+| 5-cluster (original) | 5 | **940:36 = 26:1** | ❌ Catastrophic imbalance; CNN achieves ~77 % accuracy by predicting the dominant cluster |
+| **11 merged** | **11** | **260:36 = 7:1** | ✅ Balanced enough for cross-entropy training; sub-clusters are visually distinct (see `cluster4_subclusters_examples.png`) |
+
+**Decision:** Train on the **11 merged cluster labels** with `-1` noise discarded.
+The 7:1 imbalance is still non-trivial, so **balanced class weights** must be used.
+
+### 17.3 Penultimate Dimension: Reduce to 128-D (or Lower)
+
+The current `ShallowCNNClassifier` outputs **256-D** penultimate embeddings
+(`GAP → Linear(128, 256) → ReLU → Dropout → Linear(256, K)`).  This is problematic for
+Phase 3 downstream:
+
+| Issue | Cause | Consequence for Phase 3 |
+|-------|-------|------------------------|
+| Curse of dimensionality | 256-D cosine space | Intra/inter distances collapse; density-based clustering degrades |
+| Overfitting head | `Linear(128, 256)` adds 33 K params | Memorizes noisy pseudo-label boundaries instead of robust visual features |
+| Redundancy | GAP already outputs 128-D | The extra projection is often unnecessary for shallow CNNs |
+
+**Proposed variants:**
+
+| Variant | Penultimate Dim | Architecture Change | Rationale |
+|---------|-----------------|---------------------|-----------|
+| **A (primary)** | **128** | GAP → `Flatten → Dropout → Linear(128, K)` | ResNet-style; no extra capacity to overfit; most robust for Phase 3 |
+| B | **128** | GAP → `Flatten → Linear(128, 128) → ReLU → Dropout → Linear(128, K)` | Slightly more expressive; fallback if A underfits |
+| C | **64** | GAP → `Flatten → Linear(128, 64) → ReLU → Dropout → Linear(64, K)` | Aggressive compression; forces the conv backbone to do all the work |
+| D (baseline) | **256** | Original architecture | Baseline for comparison |
+
+**Decision:** Start with **Variant A (128-D GAP direct)**.  If validation accuracy drops
+> 5 % relative to D, try B.
+
+### 17.4 Training Adjustments
+
+The CNN is learning from raw pixels (65 K values per sample) rather than 20-D features.
+This requires different hyperparameters:
+
+| Parameter | MLP (20-D) | CNN (256×256) | Rationale |
+|-----------|-----------|---------------|-----------|
+| `epochs` | 30 | **50–100** | Raw-pixel task is harder; conv filters need more steps to stabilise |
+| `lr` | 1e-4 | **3e-4 or 5e-4** | More parameters + harder task → need stronger gradient signal |
+| `batch_size` | 32 | **16–32** | 256×256 spectra are ~4× larger in memory; use AMP + `fused=True` |
+| `class_weights` | None | **Balanced** | `sklearn.utils.class_weight.compute_class_weight` to offset 7:1 imbalance |
+| `dropout` | 0.2 | **0.3–0.5** | More capacity → more regularisation needed |
+| `augmentation` | None | **On-the-fly** | Gaussian noise (σ=0.05), intensity jitter (±15 %), optional freq/waven shifts |
+
+**AMP and VRAM check:**
+- Enable `torch.amp.autocast("cuda", dtype=torch.float16)` + `GradScaler()`.
+- Log `max_vram_mb` every epoch.
+- If VRAM > 4.5 GB → drop `batch_size` to 8 and increase `accum_steps` to 4.
+
+### 17.5 Experiment Matrix
+
+Run these in parallel (each ~30–60 min):
+
+| Run Name | Labels | Embed Dim | Class Weights | Epochs | LR | Aug | Purpose |
+|----------|--------|-----------|---------------|--------|-----|-----|---------|
+| `cnn-11cl-gap128` | 11 merged | 128 GAP | Balanced | 50 | 3e-4 | Yes | **Primary candidate** |
+| `cnn-11cl-mlp128` | 11 merged | 128 MLP | Balanced | 50 | 3e-4 | Yes | Fallback if GAP underfits |
+| `cnn-11cl-mlp64` | 11 merged | 64 MLP | Balanced | 50 | 3e-4 | Yes | Most constrained |
+| `cnn-11cl-256-baseline` | 11 merged | 256 MLP | Balanced | 50 | 3e-4 | Yes | Baseline comparison |
+
+All runs should:
+1. Load labels from `experiments/2026-06-07_phase2c-descriptor-umap5-mindist0/pseudo_labels_merged.npz`
+2. Discard `-1` noise (currently 167 / 1392 spectra)
+3. Use `SpectrumDataset` (raw `.npz` on-demand loading)
+4. Stratified 10 % train/val split with `random_state=42`
+
+### 17.6 Evaluation Checklist
+
+After each run, compute and log:
+
+| Metric | Target | How |
+|--------|--------|-----|
+| Val accuracy | > 60 % | `metrics.jsonl` best epoch |
+| Penultimate Silhouette (cosine) | > 0.10 | `silhouette_score(embeddings, labels, metric='cosine')` on val set |
+| Intra/inter contrast | > 1.5 | Pairwise cosine similarity matrix on val set |
+| VRAM peak | < 4.5 GB | `torch.cuda.max_memory_allocated()` |
+| Overfitting gap | < 10 % | `train_acc - val_acc` at best epoch |
+| Class-wise precision/recall | No class < 30 % | Per-class F1 from confusion matrix |
+
+### 17.7 Success Gate for CNN
+
+If **any** CNN run meets all targets above **and** exceeds the MLP baseline on
+Silhouette / contrast, lock the winning architecture and extract penultimate embeddings
+for the full 1,392 spectra → proceed to Phase 3.
+
+If **all** CNN runs underperform the MLP (lower Silhouette, worse contrast, or
+overfitting badly), **fall back to the MLP embeddings** and proceed to Phase 3.
+Do not iterate on CNN architecture beyond these 4 variants — the bottleneck is the
+pseudo-label quality, not model capacity.
+
+### 17.8 Implementation Notes
+
+**Required code changes:**
+1. `src/models/pseudo_label_classifier.py` — add `embed_dim` parameter to `ShallowCNNClassifier`;
+   implement GAP-direct (Variant A) and optional MLP projection (Variants B/C/D).
+2. `src/data/augmentations.py` — add `FKSpectrumTransform` callable for on-the-fly augmentations
+   in `SpectrumDataset.__getitem__`.
+3. `src/training/pseudo_label_trainer.py` — add optional `class_weights` to `CrossEntropyLoss`.
+4. `scripts/phase2_supervised/train_pseudo_label_classifier.py` — pass `use_features=false`,
+   load merged labels via `--labels`, expose `--augment` flag.
+5. `configs/phase2_supervised_cnn.yaml` — new config file with CNN-specific hyperparameters.
+
+**Command template:**
+```bash
+python scripts/phase2_supervised/train_pseudo_label_classifier.py \
+    --config configs/phase2_supervised_cnn.yaml \
+    --labels experiments/2026-06-07_phase2c-descriptor-umap5-mindist0/pseudo_labels_merged.npz \
+    --name phase2c-cnn-11cl-gap128
+```
+

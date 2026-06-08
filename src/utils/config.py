@@ -302,6 +302,14 @@ class PseudoLabelConfig:
     # Model (CNN)
     cnn_dropout: float = 0.2
 
+    # Augmentation (applied only when use_features=False / CNN mode)
+    augment_noise_std: float = 0.05
+    augment_intensity_jitter: float = 0.15
+    augment_freq_shift_max: float = 0.0
+    augment_waven_shift_max: float = 0.0
+    augment_freq_dropout_prob: float = 0.0
+    augment_freq_dropout_width: float = 0.05
+
     # Training
     batch_size: int = 32
     accum_steps: int = 1

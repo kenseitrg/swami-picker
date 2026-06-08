@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from collections.abc import Callable
+
 import torch
 import torch.nn as nn
 
@@ -71,10 +73,18 @@ class ShallowCNNClassifier(nn.Module):
     followed by an MLP classifier head.  Suitable for learning features
     from the raw 256×256 spectra when engineered features are insufficient.
 
+    An optional on-the-fly augmentation callable can be attached; it is
+    applied inside :meth:`forward` **only when** ``self.training`` is
+    ``True``.  This keeps the data-loading code simple while guaranteeing
+    that evaluation / embedding extraction sees clean, un-augmented
+    spectra.
+
     Args:
         in_channels: Number of input channels (default 1 for greyscale spectra).
         num_classes: Number of output clusters (K).
         dropout: Dropout probability in the classifier head.
+        augment: Optional callable ``(Tensor) -> Tensor`` applied during
+            training only (e.g. :class:`~src.data.augmentations.FKSpectrumTransform`).
     """
 
     def __init__(
@@ -82,8 +92,10 @@ class ShallowCNNClassifier(nn.Module):
         in_channels: int = 1,
         num_classes: int = 10,
         dropout: float = 0.2,
+        augment: Callable[[torch.Tensor], torch.Tensor] | None = None,
     ) -> None:
         super().__init__()
+        self.augment = augment
         self.features = nn.Sequential(
             nn.Conv2d(in_channels, 32, kernel_size=3, padding=1),
             nn.BatchNorm2d(32),
@@ -109,17 +121,24 @@ class ShallowCNNClassifier(nn.Module):
     def forward(self, x: torch.Tensor) -> torch.Tensor:
         """Compute class logits from a raw spectrum.
 
+        Augmentations (if configured) are applied **only in train mode**.
+
         Args:
             x: Input tensor of shape ``(B, in_channels, 256, 256)``.
 
         Returns:
             Logits tensor of shape ``(B, num_classes)``.
         """
+        if self.training and self.augment is not None:
+            x = self.augment(x)
         x = self.features(x)
         return self.classifier(x)
 
     def extract_embedding(self, x: torch.Tensor) -> torch.Tensor:
         """Extract the penultimate-layer embedding.
+
+        Augmentations are **never** applied here, even in train mode,
+        so that extracted embeddings are deterministic.
 
         Args:
             x: Input tensor of shape ``(B, in_channels, 256, 256)``.

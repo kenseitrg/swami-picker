@@ -12,6 +12,7 @@ from torch.utils.data import DataLoader, Dataset
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 
+from src.data.augmentations import FKSpectrumTransform
 from src.models.pseudo_label_classifier import MLPClassifier, ShallowCNNClassifier
 from src.training.pseudo_label_trainer import PseudoLabelTrainer
 from src.utils.config import PseudoLabelConfig
@@ -314,14 +315,30 @@ def main(argv: list[str] | None = None) -> int:
         )
 
         num_classes = int(np.max(core_labels) + 1)
+        augment = FKSpectrumTransform(
+            noise_std=config.augment_noise_std,
+            intensity_jitter=config.augment_intensity_jitter,
+            freq_shift_max=config.augment_freq_shift_max,
+            waven_shift_max=config.augment_waven_shift_max,
+            freq_dropout_prob=config.augment_freq_dropout_prob,
+            freq_dropout_width=config.augment_freq_dropout_width,
+        )
         model = ShallowCNNClassifier(
             in_channels=1,
             num_classes=num_classes,
             dropout=config.cnn_dropout,
+            augment=augment,
         )
         logger.info(
-            "CNN classifier: num_classes=%d",
+            "CNN classifier: num_classes=%d, augment=%s",
             num_classes,
+            any([
+                config.augment_noise_std > 0,
+                config.augment_intensity_jitter > 0,
+                config.augment_freq_shift_max > 0,
+                config.augment_waven_shift_max > 0,
+                config.augment_freq_dropout_prob > 0,
+            ]),
         )
 
     train_loader = DataLoader(
