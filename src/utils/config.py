@@ -301,6 +301,7 @@ class PseudoLabelConfig:
 
     # Model (CNN)
     cnn_dropout: float = 0.2
+    cnn_embed_dim: int = 128  # 128=GAP-direct, 256=original MLP head
 
     # Augmentation (applied only when use_features=False / CNN mode)
     augment_noise_std: float = 0.05
@@ -309,6 +310,9 @@ class PseudoLabelConfig:
     augment_waven_shift_max: float = 0.0
     augment_freq_dropout_prob: float = 0.0
     augment_freq_dropout_width: float = 0.05
+
+    # Class imbalance handling
+    use_class_weights: bool = False  # True = balanced weights in CrossEntropyLoss
 
     # Training
     batch_size: int = 32

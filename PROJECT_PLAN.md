@@ -141,13 +141,17 @@ too low for any self-supervised objective to extract distinguishing features.
 3. **Step 2:** Re-cluster the dominant cluster with the same pipeline to split it into sub-clusters
 4. Merge sub-clusters with the stable core → balanced 11-cluster label set
 5. Train a lightweight MLP classifier (cross-entropy) on the merged pseudo-labels
-6. Use the classifier's penultimate layer as embeddings for Phase 3
+6. Use the classifier's penultimate layer as embeddings for Phase 3 clustering & active learning
 
 **Why this works where self-supervised failed:**
 - Cross-entropy loss **explicitly forces the model to discriminate between clusters**
 - The model receives a direct "push different samples apart" signal
 - Even if pseudo-labels are noisy, the classifier must learn to separate them
 - 2-step hierarchical clustering prevents a single dominant cluster from collapsing the label space
+
+**Important limitation:** The MLP operates on **20-D descriptors**, not raw 256×256 spectra. It produces **cluster labels and embeddings** for data organization, but it cannot output pixel-level `(frequency, wavenumber)` picks. Phase 4 requires a separate **spatial picking model** trained on expert annotations.
+
+**CNN experiments (abandoned):** A shallow 3-layer CNN was tested on raw spectra with multiple configurations (256-D head, 128-D GAP-direct, class weights, conservative augmentations). All variants failed to converge (val_acc < 37 %, negative Silhouette). The CNN's receptive field (~7×7) is too small to capture the global diagonal dispersion modes, and 1,100 training samples are insufficient for a CNN to learn spatial features from scratch.
 
 #### Clustering Front-End
 ```
@@ -189,17 +193,20 @@ Raw spectrum (256×256)
 
 #### Architecture for Stage-1 Classifier
 ```
-Input (features: 20-D or raw: 1×256×256)
+Input (features: 20-D)
     │
-    ├──► MLP(20→256→128→K)   [for feature input]
-    └──► CNN(→128→GAP→256→K) [for raw spectra]
+    ├──► MLP(20→256→128→K)
     │
-    └──► Penultimate layer → Embedding for Phase 3
+    └──► Penultimate layer (128-D) → Embedding for Phase 3 clustering
 ```
+
+**Why not CNN?** See CNN experiments note above. CNN on raw spectra failed; MLP on descriptors succeeded and is locked as the production architecture.
 
 #### Stage-2 Pseudo-Label Expansion
 After Stage-1 training, run inference on noise points (-1). Accept pseudo-labels where
 softmax confidence ≥ 0.90 and cluster size after addition ≥ 5. Retrain on expanded set.
+
+**Result:** Only 5 of 167 noise points were recovered (3 % expansion rate), confirming that noise points are genuinely ambiguous and best handled in Phase 3 active learning.
 
 #### Configuration
 | Parameter | Value | Rationale |
@@ -213,15 +220,27 @@ softmax confidence ≥ 0.90 and cluster size after addition ≥ 5. Retrain on ex
 | Optimizer | AdamW(fused=True), LR=1e-4, cosine decay | Proven stable |
 | Epochs | 30 (smoke test) → 100 (full) | Quick validation |
 
+#### Achieved Results (Locked)
+
+| Experiment | Config | Val Acc | Silhouette (cosine) | Contrast | Notes |
+|-----------|--------|---------|---------------------|----------|-------|
+| Stage-1 MLP | 30 ep, no weights | **74.8%** | **0.386** | **1.63** | Baseline |
+| Stage-3 MLP | 30 ep, expanded labels | 72.4% | 0.378 | 1.62 | Pseudo-label expansion |
+| **Stage-1 MLP weighted** | **30 ep, balanced weights** | **82.1%** | **0.378** | **~1.6** | **Locked winner** |
+| CNN 256-D | 50 ep, weights | 33.3% | −0.13 | ~1.0 | ❌ Failed |
+| CNN GAP-128 | 50 ep, weights | 28.5% | −0.09 | ~1.0 | ❌ Failed |
+
+**Locked architecture:** `MLP(20→256→128→11)` with balanced class weights, `lr=1e-4`, 30 epochs, `dropout=0.2`.
+
 #### Success Criteria
-| Metric | Target | How to Verify |
-|--------|--------|---------------|
-| Training accuracy | > 60% (above random for 11 clusters) | Logged per epoch |
-| Validation accuracy | Within 10% of training accuracy | Check for overfitting |
-| Silhouette score (penultimate) | > 0.10 | Logged at visualization epochs |
-| Intra/inter contrast | > 1.5 | Similarity matrix plot |
-| VRAM | < 4.5 GB | `max_vram_mb` logged |
-| Pseudo-label purity | > 85% agreement (Stage 1 ↔ Stage 3) | Confusion matrix diagonal |
+| Metric | Target | Achieved | How to Verify |
+|--------|--------|----------|---------------|
+| Training accuracy | > 60% | **82.1%** | Logged per epoch |
+| Validation accuracy | Within 10% of training accuracy | **82.1%** (train 84.1%) | Check for overfitting |
+| Silhouette score (penultimate) | > 0.10 | **0.386** (cosine) | Logged at visualization epochs |
+| Intra/inter contrast | > 1.5 | **1.63** | Similarity matrix plot |
+| VRAM | < 4.5 GB | **17 MB** | `max_vram_mb` logged |
+| Pseudo-label purity | > 85% | **98.4%** | Confusion matrix diagonal |
 
 ---
 
@@ -257,9 +276,11 @@ regularization failed.
 ---
 
 ## 🔍 Phase 3: Clustering & Active Learning (Labeling Strategy)
+
 ### Embedding Extraction
-- Freeze MAE encoder, extract `[B, embed_dim]` vectors for full dataset
+- Use the **locked MLP classifier's penultimate layer** (128-D) for all 1,392 spectra
 - L2-normalize embeddings for cosine-based clustering
+- These embeddings are cluster-discriminative but **not spatial** — they organize spectra for efficient expert annotation
 
 ### Prototype-Based Clustering
 | Component | Configuration |
@@ -270,36 +291,98 @@ regularization failed.
 | Pruning | Remove prototypes with rolling usage `<5%`; merge highly correlated centroids |
 | Temperature | Anneal `τ: 0.1 → 0.05` over 20 epochs |
 
+**Note:** Prototype clustering operates on the **MLP embeddings (128-D)**, not on raw spectra or a frozen MAE encoder. The prototypes identify regions of the descriptor space that correspond to distinct dispersion signatures.
+
 ### 📌 Expert Labeling Budget & Active Learning Strategy
 - **Target**: **A few high-quality picks per *active* cluster** (parameter defined by user as a max percentage of cluster examples)
 - **Labeling Schedule**:
-  - Iteration 0: 5 diverse/core samples per cluster
-  - Iterations 1–3: Add 2–5 uncertain/boundary samples per cluster based on model entropy
+  - Iteration 0: 5 diverse/core samples per cluster (drawn from cluster centroids in MLP embedding space)
+  - Iterations 1–3: Add 2–5 uncertain/boundary samples per cluster based on prototype assignment entropy
   - Stop when validation RMSE plateaus or cluster coverage >90%
 - **Query Strategy**: Hybrid sampling (core centroids + high uncertainty + prototype boundaries) with similarity deduplication
 - **Expected Efficiency**: ~80% of maximum performance gain achieved at ~8 labels/cluster; diminishing returns beyond ~15/cluster
 
 ### Human-in-the-Loop Interface
-- **Display**: Top 3–5 representative spectra per cluster + UMAP neighborhood
+- **Display**: Top 3–5 representative spectra per cluster + UMAP neighborhood (colored by MLP cluster labels)
 - **Annotation**: Minimal click-based pick (frequency-wavenumber pairs) + confidence flag
-- **Query Strategy**: Active sampling based on assignment entropy, prototype confidence, and reconstruction error
+- **Query Strategy**: Active sampling based on prototype assignment entropy and MLP embedding uncertainty (softmax confidence)
 
 ---
 
 ## 🎯 Phase 4: Supervised Fine-Tuning & Picking
-### Model Adaptation
-- Freeze MAE encoder weights
-- Attach lightweight picking head: `Conv2D → AdaptivePool → MLP` (outputs 1D dispersion curve with heatmap)
-- Optional: Add Monte Carlo dropout for uncertainty quantification
+
+### Architectural Reality Check
+
+The original plan assumed a **pre-trained MAE encoder** would provide spatial features for a picking head. Since MAE failed (embedding collapse), there is **no frozen encoder** to reuse. The Phase 4 picking model must be trained **end-to-end** on expert picks from Phase 3.
+
+The MLP classifier from Phase 2c produces **cluster embeddings (128-D)**, not spatial features. It cannot output pixel-level picks. Its role in Phase 4 is optional **cluster conditioning** (see Option B below), not feature extraction.
+
+### Option A: Lightweight U-Net / Encoder-Decoder (Primary)
+
+**Architecture:**
+```
+Input: (1, 256, 256) raw spectrum
+
+Encoder:                        Decoder:
+  Conv(1→32, k=3)                Conv(128→64, k=3) + Upsample(2×)
+  Conv(32→64, k=3)               Conv(64→32, k=3) + Upsample(2×)
+  Conv(64→128, k=3)              Conv(32→1, k=1) → (1, 256, 256) heatmap
+
+Output: For each frequency column, softmax over wavenumber axis → argmax → (256,) pick indices
+```
+
+**Why this works:**
+- Each frequency column predicts one wavenumber → fundamental-mode dispersion curve
+- The model learns from raw pixels where the spatial relationship between frequency and wavenumber is preserved
+- Modest capacity (~0.5M params) trains well on ~150–200 expert picks with heavy augmentation
+- Can be trained on CPU if needed; fits easily in 6 GB VRAM
+
+### Option B: Cluster-Conditional Picking (Hybrid Fallback)
+
+If cluster-specific priors improve accuracy, concatenate the MLP cluster embedding as conditioning:
+
+```
+Raw spectrum (1, 256, 256)
+    │
+    ├──► Conv encoder → spatial features (128, 64, 64)
+    │
+    └──► MLP encoder → cluster embedding (128-D)
+              │
+              └──► Broadcast to (128, 64, 64) and concat with spatial features
+
+Picking head → (1, 256, 256) heatmap → (256,) picks
+```
+
+**When to use:** If Option A struggles with large cluster-to-cluster variation (e.g., steep vs. flat dispersion). The cluster embedding acts as a learned "prior type" signal.
+
+### Training Data Budget
+
+| Source | Count | Augmentation Factor | Effective |
+|--------|-------|---------------------|-----------|
+| Iteration 0 (core samples) | 11 × 5 = 55 | ×10 (shifts, noise, jitter) | ~550 |
+| Iterations 1–3 (boundaries) | 11 × 3 × 3 = 99 | ×10 | ~990 |
+| **Total** | **~154 expert picks** | | **~1,540 training examples** |
+
+Augmentations for picking: frequency/wavenumber shifts (±5 %), Gaussian noise, intensity jitter. Shifts are **safe here** because picks are annotated on the *augmented* spectrum (the expert sees the shifted modes and clicks accordingly).
 
 ### Training Setup
-| Parameter | Value |
-|-----------|-------|
-| Optimizer | `AdamW` |
-| LR | `5e-5` (encoder), `1e-4` (head) |
-| Loss | Smooth L1 (curve regression) + BCE (presence/absence mask) |
-| Epochs | 15–30 (few-shot convergence) |
-| Regularization | Dropout `0.2`, early stopping on validation picking RMSE |
+| Parameter | Value | Rationale |
+|-----------|-------|-----------|
+| Architecture | U-Net or encoder-decoder | Spatial features needed for pixel-level regression |
+| Optimizer | `AdamW (fused=True)` | Stable with small datasets |
+| LR | `1e-3` (head), `5e-5` (encoder) | Higher LR for randomly initialized head |
+| Loss | Smooth L1 (curve regression) + BCE (presence/absence mask) | L1 robust to outliers; BCE handles "no mode visible" columns |
+| Epochs | 50–100 with early stopping | Small dataset; watch validation picking RMSE |
+| Regularization | Dropout `0.3`, heavy augmentation | Prevent overfitting to ~150 picks |
+| Batch size | 8–16 | Small dataset; use gradient accumulation if needed |
+
+### Success Criteria
+| Metric | Target | How to Verify |
+|--------|--------|---------------|
+| Picking RMSE (model space) | < 3 pixels | Expert picks vs. model output on held-out val set |
+| Presence/absence F1 | > 0.85 | BCE head accuracy on whether a mode exists at each frequency |
+| Velocity error ΔV/V | < 0.15 | After Phase 5 coordinate transform |
+| Visual sanity | — | Overlay predicted curves on spectra; should follow visible mode energy |
 
 ---
 

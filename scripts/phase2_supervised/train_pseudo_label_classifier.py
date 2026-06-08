@@ -299,13 +299,18 @@ def main(argv: list[str] | None = None) -> int:
             logger.info(
                 "Dry-run mode: subset to %d samples", dry_limit
             )
+        from collections import Counter
         from sklearn.model_selection import train_test_split
 
+        stratify = [labels_dict[sid] for sid in all_ids]
+        # Skip stratification when any class has <2 members (e.g. dry-run subset)
+        if min(Counter(stratify).values()) < 2:
+            stratify = None
         train_ids, val_ids = train_test_split(
             all_ids,
             test_size=0.10,
             random_state=config.seed,
-            stratify=[labels_dict[sid] for sid in all_ids],
+            stratify=stratify,
         )
         train_ds = SpectrumDataset(
             manifest_path, {sid: labels_dict[sid] for sid in train_ids}
@@ -327,11 +332,13 @@ def main(argv: list[str] | None = None) -> int:
             in_channels=1,
             num_classes=num_classes,
             dropout=config.cnn_dropout,
+            embed_dim=config.cnn_embed_dim,
             augment=augment,
         )
         logger.info(
-            "CNN classifier: num_classes=%d, augment=%s",
+            "CNN classifier: num_classes=%d, embed_dim=%d, augment=%s",
             num_classes,
+            config.cnn_embed_dim,
             any([
                 config.augment_noise_std > 0,
                 config.augment_intensity_jitter > 0,
@@ -362,6 +369,35 @@ def main(argv: list[str] | None = None) -> int:
         len(val_ds),
     )
 
+    # Compute balanced class weights if requested
+    class_weights = None
+    if getattr(config, "use_class_weights", False):
+        from sklearn.utils.class_weight import compute_class_weight
+
+        if config.use_features:
+            all_labels = label_array
+        else:
+            all_labels = np.array([labels_dict[sid] for sid in train_ids])
+        unique_classes = np.unique(all_labels)
+        weights = compute_class_weight(
+            "balanced",
+            classes=unique_classes,
+            y=all_labels,
+        )
+        # Build a full weight vector aligned with num_classes
+        num_classes_for_weights = int(np.max(all_labels) + 1)
+        full_weights = np.ones(num_classes_for_weights, dtype=np.float32)
+        for cls, w in zip(unique_classes, weights):
+            full_weights[int(cls)] = w
+        class_weights = torch.from_numpy(full_weights)
+        logger.info(
+            "Balanced class weights: min=%.3f, max=%.3f (for %d/%d classes)",
+            class_weights.min().item(),
+            class_weights.max().item(),
+            len(unique_classes),
+            num_classes_for_weights,
+        )
+
     trainer = PseudoLabelTrainer(
         model=model,
         config=config,
@@ -372,6 +408,7 @@ def main(argv: list[str] | None = None) -> int:
         run_dir=run_dir,
         resume_from=Path(args.resume) if args.resume else None,
         argv=sys.argv,
+        class_weights=class_weights,
     )
     trainer.train()
 

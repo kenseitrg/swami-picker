@@ -62,6 +62,7 @@ class PseudoLabelTrainer:
         run_dir: Path,
         resume_from: Path | None = None,
         argv: list[str] | None = None,
+        class_weights: torch.Tensor | None = None,
     ) -> None:
         """Initialise the trainer.
 
@@ -78,6 +79,8 @@ class PseudoLabelTrainer:
             run_dir: Root directory for the current run (logs, plots).
             resume_from: Optional checkpoint path to resume from.
             argv: Command-line arguments for reproducibility logging.
+            class_weights: Optional per-class weight tensor for ``CrossEntropyLoss``.
+                If provided, sent to *device* automatically.
         """
         self.model = model.to(device)
         self.config = config
@@ -91,7 +94,15 @@ class PseudoLabelTrainer:
         self.optimizer = self._setup_optimizer()
         self.scheduler = self._setup_scheduler()
         self.scaler = GradScaler() if device.type == "cuda" else None
-        self.criterion = nn.CrossEntropyLoss()
+        if class_weights is not None:
+            class_weights = class_weights.to(device)
+            logger.info(
+                "Using class weights (min=%.3f, max=%.3f, mean=%.3f)",
+                class_weights.min().item(),
+                class_weights.max().item(),
+                class_weights.mean().item(),
+            )
+        self.criterion = nn.CrossEntropyLoss(weight=class_weights)
 
         self.global_step = 0
         self.start_epoch = 0

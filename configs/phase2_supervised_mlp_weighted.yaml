@@ -1,0 +1,47 @@
+# Phase 2C: MLP classifier with balanced class weights
+# Retrain MLP on 20-D descriptors to see if class balancing improves baseline.
+
+# Data paths
+manifest_path: "data/processed/manifest.json"
+pseudo_labels_path: "data/processed/pseudo_labels.npz"
+feature_path: "data/processed/features/features_descriptors.npz"
+
+# Model selection
+use_features: true
+
+# MLP architecture
+mlp_hidden_dims: [256, 128]
+mlp_dropout: 0.2
+
+# CNN architecture (unused)
+cnn_dropout: 0.2
+cnn_embed_dim: 128
+
+# Augmentation (unused for MLP)
+augment_noise_std: 0.05
+augment_intensity_jitter: 0.15
+augment_freq_shift_max: 0.0
+augment_waven_shift_max: 0.0
+augment_freq_dropout_prob: 0.0
+augment_freq_dropout_width: 0.05
+
+# Class imbalance handling
+use_class_weights: true
+
+# Training
+batch_size: 32
+accum_steps: 1
+epochs: 30
+lr: 1.0e-4
+weight_decay: 0.05
+betas: [0.9, 0.95]
+warmup_ratio: 0.1
+grad_clip_norm: 1.0
+seed: 42
+
+# System
+num_workers: 4
+pin_memory: true
+
+# Logging
+log_interval: 50

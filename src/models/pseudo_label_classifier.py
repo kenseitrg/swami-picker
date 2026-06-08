@@ -92,10 +92,12 @@ class ShallowCNNClassifier(nn.Module):
         in_channels: int = 1,
         num_classes: int = 10,
         dropout: float = 0.2,
+        embed_dim: int = 128,
         augment: Callable[[torch.Tensor], torch.Tensor] | None = None,
     ) -> None:
         super().__init__()
         self.augment = augment
+        self.embed_dim = embed_dim
         self.features = nn.Sequential(
             nn.Conv2d(in_channels, 32, kernel_size=3, padding=1),
             nn.BatchNorm2d(32),
@@ -110,13 +112,21 @@ class ShallowCNNClassifier(nn.Module):
             nn.ReLU(),
             nn.AdaptiveAvgPool2d((1, 1)),  # -> (B, 128, 1, 1)
         )
-        self.classifier = nn.Sequential(
-            nn.Flatten(),  # (B, 128)
-            nn.Linear(128, 256),
-            nn.ReLU(),
-            nn.Dropout(dropout),
-            nn.Linear(256, num_classes),
-        )
+        if embed_dim == 128:
+            # GAP-direct: no intermediate projection
+            self.classifier = nn.Sequential(
+                nn.Flatten(),  # (B, 128)
+                nn.Dropout(dropout),
+                nn.Linear(128, num_classes),
+            )
+        else:
+            self.classifier = nn.Sequential(
+                nn.Flatten(),  # (B, 128)
+                nn.Linear(128, embed_dim),
+                nn.ReLU(),
+                nn.Dropout(dropout),
+                nn.Linear(embed_dim, num_classes),
+            )
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
         """Compute class logits from a raw spectrum.
@@ -144,7 +154,7 @@ class ShallowCNNClassifier(nn.Module):
             x: Input tensor of shape ``(B, in_channels, 256, 256)``.
 
         Returns:
-            Embedding tensor of shape ``(B, 256)``.
+            Embedding tensor of shape ``(B, embed_dim)``.
         """
         x = self.features(x)
         x = nn.Flatten()(x)  # (B, 128)
