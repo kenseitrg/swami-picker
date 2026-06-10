@@ -537,4 +537,11 @@ After the session completes, fill in:
 
 ---
 
+## 13. Known Issues & Deferred Fixes
+
+| Issue | Severity | Location | Description | Proposed Fix |
+|-------|----------|----------|-------------|--------------|
+| Hardcoded relative spectrum path | **Warning** | `src/picking/annotation_app.py:188` | `load_preprocessed_spectrum` uses `Path("data/processed/spectra")`. If the app is launched from any directory other than the project root, all spectrum loads fail with `FileNotFoundError`. | Resolve the path relative to the session directory or store it as an absolute path in the session config. |
+| Relative `annotations_dir` in manifest | **Warning** | `src/picking/annotation_app.py:72` | `annotations_dir` is stored as a relative string in `manifest.json`. Launching from a different CWD causes annotations to be saved to the wrong location. | Resolve `annotations_dir` relative to the manifest's parent directory at load time, or store as absolute path. |
+
 *Last updated: 2026-06-10*
