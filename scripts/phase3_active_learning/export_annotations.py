@@ -100,9 +100,20 @@ def _collect_annotations(
         with open(manifest_path) as fh:
             manifest: dict[str, Any] = json.load(fh)
 
-        annotations_dir = Path(manifest.get("annotations_dir", session_dir / "spectra"))
-        if not annotations_dir.is_absolute():
-            annotations_dir = session_dir / annotations_dir
+        raw_dir = manifest.get("annotations_dir", "spectra")
+        annotations_dir = Path(raw_dir)
+        # The manifest may store a relative path from the project root
+        # (e.g. "annotations/2026-06-10_test01/spectra").  Try three
+        # resolution strategies and pick the first one that exists.
+        candidates = [
+            annotations_dir,                       # as-is (absolute or CWD-relative)
+            session_dir.parent / annotations_dir,  # relative to project root
+            session_dir / "spectra",               # fallback default
+        ]
+        annotations_dir = next(
+            (p for p in candidates if p.exists()),
+            candidates[-1],
+        )
 
         for npz_path in sorted(annotations_dir.glob("*.npz")):
             try:
