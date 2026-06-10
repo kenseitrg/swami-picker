@@ -108,9 +108,7 @@ def _print_budget_table(
 
     total_size = sum(sizes.get(cid, 0) for cid in budget)
     total_target = sum(budget.values())
-    total_pct = (
-        (total_target / total_size * 100.0) if total_size > 0 else 0.0
-    )
+    total_pct = (total_target / total_size * 100.0) if total_size > 0 else 0.0
     rows.append(
         (
             "TOTAL",
@@ -124,9 +122,7 @@ def _print_budget_table(
     col_widths = [max(len(r[i]) for r in rows + [col_names]) for i in range(4)]
 
     def fmt_row(cells: list[str] | tuple[str, ...]) -> str:
-        return "  ".join(
-            cell.ljust(width) for cell, width in zip(cells, col_widths)
-        )
+        return "  ".join(cell.ljust(width) for cell, width in zip(cells, col_widths))
 
     print(fmt_row(col_names))
     print("-" * (sum(col_widths) + 3 * 4))
@@ -138,7 +134,7 @@ def _confirm(prompt: str = "Proceed with annotation? [Y/n] ") -> bool:
     """Ask the user for confirmation via stdin."""
     try:
         response = input(prompt).strip().lower()
-    except (EOFError, KeyboardInterrupt):
+    except EOFError, KeyboardInterrupt:
         return False
     return response in ("", "y", "yes")
 
