@@ -14,3 +14,4 @@ experiments/*/
 !experiments/MODEL_CHANGELOG.md
 /literature/
 .coverage
+annotations/*/

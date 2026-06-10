@@ -23,6 +23,7 @@ from src.picking.interpolation import (
     add_pick,
     delete_picks_at_location,
     interpolate_picks,
+    snap_picks_to_maxima,
 )
 
 logger = logging.getLogger(__name__)
@@ -47,6 +48,8 @@ class AnnotationApp(tk.Tk):
     ``d`` — delete the pick nearest to the current mouse X position.
     ``x`` — clear all picks on the current spectrum (with confirmation).
     ``s`` — force-save current annotation.
+    ``v`` — snap all direct picks to the nearest positive local
+    maximum and recompute the interpolated curve.
     ``↑`` / ``↓`` — nudge the most recently added pick up/down by one
     wavenumber index.
     ``Esc`` — quit (prompts to save if unsaved).
@@ -152,7 +155,7 @@ class AnnotationApp(tk.Tk):
             self.status_frame,
             text=(
                 "Space=Next  Z=Prev  Q=PrevCluster  W=NextCluster  "
-                "D=Delete  X=Clear  S=Save  Esc=Quit  ↑↓=Nudge"
+                "D=Delete  V=SnapToMax  X=Clear  S=Save  Esc=Quit  ↑↓=Nudge"
             ),
             fg="gray",
         )
@@ -164,6 +167,7 @@ class AnnotationApp(tk.Tk):
         self.bind("q", lambda _e: self._jump_cluster(-1))
         self.bind("w", lambda _e: self._jump_cluster(1))
         self.bind("d", lambda _e: self._delete_at_cursor())
+        self.bind("v", lambda _e: self._snap_picks())
         self.bind("x", lambda _e: self._clear_spectrum())
         self.bind("s", lambda _e: self._save_current())
         self.bind("<Escape>", lambda _e: self._quit())
@@ -239,14 +243,17 @@ class AnnotationApp(tk.Tk):
         extent = (
             float(freq_axis[0]),
             float(freq_axis[-1]),
-            float(waven_axis[0]),
             float(waven_axis[-1]),
+            float(waven_axis[0]),
         )
 
+        # origin="upper" places array row 0 at the visual top,
+        # matching seismic convention (low wavenumber / low velocity
+        # at the top of the plot).
         self.ax.imshow(
             self.spectrum_tensor,
             extent=extent,
-            origin="lower",
+            origin="upper",
             cmap="viridis",
             aspect="auto",
         )
@@ -271,9 +278,13 @@ class AnnotationApp(tk.Tk):
                     label="Interpolated",
                 )
 
-            direct_freqs = np.flatnonzero(direct_mask)
+            # Plot direct picks using the original sparse coordinates
+            # (``wavenumber_picks`` may contain -1 for single-point
+            # cases where interpolation is not yet possible).
+            pick_dict = dict(self.picks)
+            direct_freqs = np.array(list(pick_dict.keys()), dtype=np.int64)
+            direct_wavens = np.array(list(pick_dict.values()), dtype=np.int64)
             if len(direct_freqs) > 0:
-                direct_wavens = wavenumber_picks[direct_freqs]
                 self.ax.scatter(
                     freq_axis[direct_freqs],
                     waven_axis[direct_wavens],
@@ -461,6 +472,18 @@ class AnnotationApp(tk.Tk):
         self.dirty = True
         self._update_display()
         self._update_info()
+
+    def _snap_picks(self) -> None:
+        """Snap all picks to the nearest positive local maxima."""
+        if not self.picks or self.spectrum_tensor is None:
+            return
+        snapped = snap_picks_to_maxima(self.picks, self.spectrum_tensor)
+        if snapped != self.picks:
+            self.picks = snapped
+            self.dirty = True
+            logger.debug("Snapped %d picks to maxima", len(self.picks))
+            self._update_display()
+            self._update_info()
 
     def _save_current(self) -> None:
         """Persist the current annotation to disk."""

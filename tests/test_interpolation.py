@@ -9,6 +9,7 @@ from src.picking.interpolation import (
     delete_picks_at_location,
     interpolate_picks,
     remove_pick,
+    snap_picks_to_maxima,
 )
 
 
@@ -165,6 +166,59 @@ class TestDeletePicksAtLocation:
     def test_no_match_is_noop(self) -> None:
         result = delete_picks_at_location([(10, 20)], 50, tol=1)
         assert result == [(10, 20)]
+
+
+class TestSnapPicksToMaxima:
+    """Tests for :func:`snap_picks_to_maxima`."""
+
+    @pytest.fixture
+    def simple_spectrum(self) -> np.ndarray:
+        """A 256×256 spectrum with a clear diagonal ridge."""
+        spec = np.full((256, 256), -0.5, dtype=np.float32)
+        for f in range(256):
+            w = int(50 + f * 0.5)
+            if 0 <= w < 256:
+                # Create a sharp positive peak with neighbouring dips.
+                spec[w, f] = 1.0
+                if w > 0:
+                    spec[w - 1, f] = 0.3
+                if w < 255:
+                    spec[w + 1, f] = 0.3
+        return spec
+
+    def test_snap_to_ridge_peak(self, simple_spectrum: np.ndarray) -> None:
+        """A pick near the ridge snaps to the exact peak index."""
+        # At f=100 the ridge peak is at w=100.
+        picks = [(100, 95)]  # slightly above peak
+        snapped = snap_picks_to_maxima(picks, simple_spectrum)
+        assert snapped == [(100, 100)]
+
+    def test_snap_no_positive_maxima(self) -> None:
+        """If no positive maxima exist the pick is unchanged."""
+        spec = np.full((256, 256), -0.5, dtype=np.float32)
+        picks = [(50, 100)]
+        snapped = snap_picks_to_maxima(picks, spec)
+        assert snapped == picks
+
+    def test_snap_multiple_picks(self, simple_spectrum: np.ndarray) -> None:
+        """All picks in the list are snapped independently."""
+        picks = [(100, 95), (200, 160)]
+        snapped = snap_picks_to_maxima(picks, simple_spectrum)
+        # f=100 peak at w=100, f=200 peak at w=150.
+        assert snapped[0] == (100, 100)
+        assert snapped[1] == (200, 150)
+
+    def test_snap_unchanged_if_already_peak(self, simple_spectrum: np.ndarray) -> None:
+        """A pick already on a maximum stays put."""
+        picks = [(100, 100)]
+        snapped = snap_picks_to_maxima(picks, simple_spectrum)
+        assert snapped == picks
+
+    def test_snap_invalid_index_raises(self) -> None:
+        """Out-of-bounds pick indices raise ValueError."""
+        spec = np.zeros((256, 256), dtype=np.float32)
+        with pytest.raises(ValueError, match="out of bounds"):
+            snap_picks_to_maxima([(256, 10)], spec)
 
 
 class TestAddRemoveIdempotent:

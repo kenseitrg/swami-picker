@@ -5,6 +5,7 @@ from typing import TYPE_CHECKING
 
 import numpy as np
 from scipy.interpolate import PchipInterpolator
+from scipy.signal import find_peaks
 
 if TYPE_CHECKING:
     from numpy.typing import NDArray
@@ -151,6 +152,38 @@ def remove_pick(
         A new list with the pick removed (unchanged if not present).
     """
     return [p for p in existing_picks if p[0] != freq_idx]
+
+
+def snap_picks_to_maxima(
+    picks: list[tuple[int, int]],
+    spectrum: np.ndarray,
+) -> list[tuple[int, int]]:
+    """Snap each pick to the nearest positive local maximum in its column.
+
+    For every pick at frequency ``f`` the 1-D amplitude profile
+    ``spectrum[:, f]`` is scanned for positive local maxima (peaks with
+    amplitude ``> 0``).  The pick is moved to the nearest such maximum.
+    If no positive maximum exists in the column the pick is left
+    unchanged.
+
+    Args:
+        picks: Current sparse picks.
+        spectrum: Spectrum array of shape ``(256, 256)``.
+
+    Returns:
+        New picks with wavenumber indices snapped to nearest maxima.
+    """
+    _validate_indices(picks)
+    snapped: list[tuple[int, int]] = []
+    for freq_idx, waven_idx in picks:
+        col = spectrum[:, freq_idx]
+        peaks, _ = find_peaks(col, height=0.0)
+        if len(peaks) == 0:
+            snapped.append((freq_idx, waven_idx))
+            continue
+        nearest_peak = peaks[np.argmin(np.abs(peaks - waven_idx))]
+        snapped.append((freq_idx, int(nearest_peak)))
+    return snapped
 
 
 def delete_picks_at_location(
