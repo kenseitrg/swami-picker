@@ -76,7 +76,11 @@ def interpolate_picks(
     direct_mask[freqs] = True
 
     if len(freqs) < 2:
-        # Insufficient for interpolation — keep direct_mask but return -1s.
+        # Interpolation is not possible, but the direct pick itself is
+        # valid data.  Store it so that save/load round-trips correctly.
+        wavenumber_picks[freqs] = np.rint(
+            np.clip(wavens, 0, n_grid - 1)
+        ).astype(np.int16)
         return wavenumber_picks, direct_mask
 
     freq_grid = np.arange(n_grid, dtype=np.float64)

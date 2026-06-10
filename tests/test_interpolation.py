@@ -27,9 +27,11 @@ class TestInterpolatePicks:
         assert not mask.any()
 
     def test_single_point_no_interp(self) -> None:
-        """One point cannot define a curve — wavenumber_picks all -1."""
+        """One point cannot define a curve, but the direct pick is stored."""
         picks, mask = interpolate_picks([(50, 100)])
-        assert_array_equal(picks, np.full(256, -1, dtype=np.int16))
+        assert picks[50] == 100   # direct pick preserved for round-trip
+        assert (picks[:50] == -1).all()
+        assert (picks[51:] == -1).all()
         assert mask[50]
         assert mask.sum() == 1
 
@@ -89,10 +91,10 @@ class TestInterpolatePicks:
     def test_deduplicate_by_frequency(self) -> None:
         """Duplicate frequencies keep the last occurrence."""
         picks, mask = interpolate_picks([(10, 20), (10, 30)])
-        # Only one point remains → no interpolation
+        # Only one point remains → no interpolation, but direct pick stored.
         assert mask[10]
         assert mask.sum() == 1
-        assert picks[10] == -1  # single point, no interpolation
+        assert picks[10] == 30  # last value kept
 
     def test_sorted_output_independent_of_input_order(self) -> None:
         """Shuffled input yields the same interpolated curve."""
