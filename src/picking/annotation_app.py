@@ -320,7 +320,13 @@ class AnnotationApp(tk.Tk):
             f"swami-picker — {spectrum_id} (C{cluster}) [{progress}]"
         )
 
-    def _update_hover_status(self, freq_idx: int, waven_idx: int) -> None:
+    def _update_hover_status(
+        self,
+        freq_idx: int,
+        waven_idx: int,
+        freq_hz: float,
+        waven_inv_m: float,
+    ) -> None:
         """Append hover coordinates to the status bar."""
         if not self.queue:
             return
@@ -328,7 +334,7 @@ class AnnotationApp(tk.Tk):
         self.status_label.config(
             text=(
                 f"Direct picks: {len(self.picks)}{dirty_flag}  |  "
-                f"Hover: freq={freq_idx}  waven={waven_idx}"
+                f"Hover: {freq_hz:.2f} Hz  {waven_inv_m:.4f} 1/m"
             )
         )
 
@@ -392,7 +398,12 @@ class AnnotationApp(tk.Tk):
             ydata, waven_axis[0], waven_axis[-1]
         )
         self._hover_freq_idx = freq_idx
-        self._update_hover_status(freq_idx, waven_idx)
+        self._update_hover_status(
+            freq_idx,
+            waven_idx,
+            freq_hz=float(freq_axis[freq_idx]),
+            waven_inv_m=float(waven_axis[waven_idx]),
+        )
 
     @staticmethod
     def _physical_to_index(
