@@ -220,3 +220,370 @@ def plot_error_distribution(
         plt.close(fig)
     else:
         plt.show()
+
+
+def _axis_arrays(
+    spec: np.ndarray, meta: dict[str, Any] | None
+) -> tuple[np.ndarray, np.ndarray]:
+    """Return frequency and wavenumber arrays for a spectrum.
+
+    Args:
+        spec: Spectrum array of shape ``(H, W)``.
+        meta: Optional metadata dict with ``freq_axis_resized`` and
+            ``waven_axis_resized``.
+
+    Returns:
+        Tuple of ``(freqs, waven)`` arrays.
+    """
+    if meta is not None:
+        freqs = np.asarray(meta["freq_axis_resized"])
+        waven = np.asarray(meta["waven_axis_resized"])
+    else:
+        freqs = np.arange(spec.shape[1])
+        waven = np.arange(spec.shape[0])
+    return freqs, waven
+
+
+def _extent_from_axes(freqs: np.ndarray, waven: np.ndarray) -> list[float]:
+    """Build an ``imshow`` extent from physical axis arrays.
+
+    Args:
+        freqs: Frequency axis array.
+        waven: Wavenumber axis array.
+
+    Returns:
+        Extent list ``[left, right, bottom, top]`` with the vertical axis
+        flipped so that low wavenumber is at the top.
+    """
+    return [float(freqs[0]), float(freqs[-1]), float(waven[-1]), float(waven[0])]
+
+
+def plot_probability_heatmap_overlay(
+    spectra: torch.Tensor | np.ndarray,
+    true_picks: torch.Tensor | np.ndarray,
+    pred_picks: torch.Tensor | np.ndarray,
+    pick_logits: torch.Tensor | np.ndarray,
+    presence_probs: torch.Tensor | np.ndarray,
+    metadata: list[dict[str, Any]] | None = None,
+    num_samples: int = 4,
+    save_path: Path | None = None,
+    seed: int = 42,
+) -> None:
+    """Overlay the model's pick probability heatmap on spectra.
+
+    For each selected spectrum, this produces a two-panel figure:
+
+    * Left: input spectrum with true (red) and predicted (green) picks.
+    * Right: the same spectrum with the per-column softmax probability
+      distribution overlaid as a translucent ``plasma`` heatmap.
+
+    Args:
+        spectra: Input spectra of shape ``(N, 1, H, W)``.
+        true_picks: Ground-truth picks of shape ``(N, W)``.
+        pred_picks: Predicted picks of shape ``(N, W)``.
+        pick_logits: Pick logits of shape ``(N, 1, H, W)``.
+        presence_probs: Presence probabilities of shape ``(N, W)``.
+        metadata: Optional list of metadata dicts for physical axes.
+        num_samples: Number of spectra to display.
+        save_path: Optional path to save the figure.
+        seed: Seed for random sample selection.
+    """
+    apply_style()
+    rng = np.random.default_rng(seed)
+
+    spectra = _to_numpy(spectra)
+    true_picks = _to_numpy(true_picks)
+    pred_picks = _to_numpy(pred_picks)
+    pick_logits = _to_numpy(pick_logits)
+    presence_probs = _to_numpy(presence_probs)
+
+    n = min(num_samples, spectra.shape[0])
+    indices = rng.choice(spectra.shape[0], size=n, replace=False)
+
+    fig, axes = plt.subplots(n, 2, figsize=(10, 3 * n))
+    if n == 1:
+        axes = np.atleast_2d(axes)
+    axes = np.atleast_2d(axes)
+
+    for row, idx in enumerate(indices):
+        spec = spectra[idx, 0]
+        meta = metadata[idx] if metadata else None
+        freqs, waven = _axis_arrays(spec, meta)
+        extent = _extent_from_axes(freqs, waven)
+
+        # Softmax over the wavenumber axis gives a proper probability map.
+        logits = pick_logits[idx, 0]  # (H, W)
+        prob_map = torch_softmax(logits, axis=0)
+        # Mask by presence probability so low-confidence columns fade out.
+        prob_map = prob_map * presence_probs[idx][None, :]
+
+        true = true_picks[idx]
+        pred = pred_picks[idx]
+        true_valid = true >= 0
+        pred_valid = pred >= 0
+
+        # Left panel: spectrum + picks.
+        ax_spec = axes[row, 0]
+        ax_spec.imshow(
+            spec, aspect="auto", cmap="viridis", extent=extent, origin="upper"
+        )
+        ax_spec.plot(
+            freqs[true_valid],
+            waven[true[true_valid].astype(int)],
+            "r-",
+            linewidth=2,
+            label="True",
+        )
+        ax_spec.plot(
+            freqs[pred_valid],
+            waven[pred[pred_valid].astype(int)],
+            "g--",
+            linewidth=1.5,
+            label="Predicted",
+        )
+        ax_spec.set_xlabel("Frequency (Hz)" if meta else "Frequency index")
+        ax_spec.set_ylabel("Wavenumber (1/m)" if meta else "Wavenumber index")
+        title = meta.get("spectrum_id", f"Sample {idx}") if meta else f"Sample {idx}"
+        ax_spec.set_title(f"{title} — Spectrum")
+        ax_spec.legend()
+
+        # Right panel: probability heatmap overlay.
+        ax_heat = axes[row, 1]
+        ax_heat.imshow(
+            spec, aspect="auto", cmap="viridis", extent=extent, origin="upper"
+        )
+        im = ax_heat.imshow(
+            prob_map,
+            aspect="auto",
+            cmap="plasma",
+            extent=extent,
+            origin="upper",
+            alpha=0.6,
+        )
+        ax_heat.plot(
+            freqs[true_valid],
+            waven[true[true_valid].astype(int)],
+            "c-",
+            linewidth=2,
+            label="True",
+        )
+        ax_heat.plot(
+            freqs[pred_valid],
+            waven[pred[pred_valid].astype(int)],
+            "g--",
+            linewidth=1.5,
+            label="Predicted",
+        )
+        ax_heat.set_xlabel("Frequency (Hz)" if meta else "Frequency index")
+        ax_heat.set_ylabel("Wavenumber (1/m)" if meta else "Wavenumber index")
+        ax_heat.set_title(f"{title} — Pick Probability Heatmap")
+        ax_heat.legend()
+        plt.colorbar(im, ax=ax_heat, fraction=0.046, pad=0.04)
+
+    plt.tight_layout()
+    if save_path is not None:
+        save_path.parent.mkdir(parents=True, exist_ok=True)
+        plt.savefig(save_path, dpi=300, bbox_inches="tight")
+        plt.close(fig)
+    else:
+        plt.show()
+
+
+def torch_softmax(x: np.ndarray, axis: int = 0) -> np.ndarray:
+    """Numerically stable softmax matching PyTorch's semantics.
+
+    Args:
+        x: Input array.
+        axis: Axis along which to compute the softmax.
+
+    Returns:
+        Softmax-normalized array with the same shape as *x*.
+    """
+    x_max = np.max(x, axis=axis, keepdims=True)
+    e_x = np.exp(x - x_max)
+    return e_x / np.sum(e_x, axis=axis, keepdims=True)
+
+
+def plot_certainty_distributions(
+    presence_probs: torch.Tensor | np.ndarray,
+    true_presence: torch.Tensor | np.ndarray | None = None,
+    save_path: Path | None = None,
+) -> None:
+    """Plot distributions of model presence certainty.
+
+    Produces a 1x2 figure:
+
+    * Left: histogram of all presence probabilities.
+    * Right: histogram split by ground-truth presence/absence (if provided).
+
+    Args:
+        presence_probs: Presence probabilities of shape ``(N, W)``.
+        true_presence: Optional ground-truth presence mask of shape
+            ``(N, W)`` with ``1``/``0`` values.
+        save_path: Optional path to save the figure.
+    """
+    apply_style()
+    probs = _to_numpy(presence_probs).flatten()
+
+    fig, axes = plt.subplots(1, 2, figsize=(12, 4))
+
+    # Overall distribution.
+    axes[0].hist(probs, bins=50, range=(0.0, 1.0), edgecolor="black")
+    axes[0].set_xlabel("Presence Probability")
+    axes[0].set_ylabel("Count")
+    axes[0].set_title("Distribution of Presence Probabilities")
+    axes[0].axvline(np.mean(probs), color="r", linestyle="--", label="mean")
+    axes[0].legend()
+
+    # Split by ground truth if available.
+    if true_presence is not None:
+        true_pres = _to_numpy(true_presence).flatten().astype(bool)
+        axes[1].hist(
+            probs[true_pres],
+            bins=50,
+            range=(0.0, 1.0),
+            alpha=0.6,
+            label="Mode present",
+            edgecolor="black",
+        )
+        axes[1].hist(
+            probs[~true_pres],
+            bins=50,
+            range=(0.0, 1.0),
+            alpha=0.6,
+            label="Mode absent",
+            edgecolor="black",
+        )
+        axes[1].set_xlabel("Presence Probability")
+        axes[1].set_ylabel("Count")
+        axes[1].set_title("Presence Probability by Ground Truth")
+        axes[1].legend()
+    else:
+        axes[1].axis("off")
+
+    plt.tight_layout()
+    if save_path is not None:
+        save_path.parent.mkdir(parents=True, exist_ok=True)
+        plt.savefig(save_path, dpi=300, bbox_inches="tight")
+        plt.close(fig)
+    else:
+        plt.show()
+
+
+def plot_column_error_heatmap(
+    spectra: torch.Tensor | np.ndarray,
+    true_picks: torch.Tensor | np.ndarray,
+    pred_picks: torch.Tensor | np.ndarray,
+    metadata: list[dict[str, Any]] | None = None,
+    num_samples: int = 4,
+    save_path: Path | None = None,
+    seed: int = 42,
+) -> None:
+    """Plot spectra with per-column pick error highlighted.
+
+    For each selected spectrum, a two-panel figure shows the spectrum on
+    the left and the same spectrum with a red overlay whose opacity is
+    proportional to the absolute pick error on the right.
+
+    Args:
+        spectra: Input spectra of shape ``(N, 1, H, W)``.
+        true_picks: Ground-truth picks of shape ``(N, W)``.
+        pred_picks: Predicted picks of shape ``(N, W)``.
+        metadata: Optional list of metadata dicts for physical axes.
+        num_samples: Number of spectra to display.
+        save_path: Optional path to save the figure.
+        seed: Seed for random sample selection.
+    """
+    apply_style()
+    rng = np.random.default_rng(seed)
+
+    spectra = _to_numpy(spectra)
+    true_picks = _to_numpy(true_picks)
+    pred_picks = _to_numpy(pred_picks)
+
+    n = min(num_samples, spectra.shape[0])
+    indices = rng.choice(spectra.shape[0], size=n, replace=False)
+
+    fig, axes = plt.subplots(n, 2, figsize=(10, 3 * n))
+    if n == 1:
+        axes = np.atleast_2d(axes)
+    axes = np.atleast_2d(axes)
+
+    for row, idx in enumerate(indices):
+        spec = spectra[idx, 0]
+        meta = metadata[idx] if metadata else None
+        freqs, waven = _axis_arrays(spec, meta)
+        extent = _extent_from_axes(freqs, waven)
+
+        true = true_picks[idx]
+        pred = pred_picks[idx]
+        valid = (true >= 0) & (pred >= 0)
+        error = np.zeros_like(true, dtype=np.float32)
+        error[valid] = np.abs(true[valid].astype(float) - pred[valid].astype(float))
+        max_err = max(error.max(), 1e-6)
+        normalized_error = error / max_err
+
+        # Build an RGBA overlay: transparent where no error, red elsewhere.
+        overlay = np.zeros((*spec.shape, 4), dtype=np.float32)
+        for col in range(spec.shape[1]):
+            overlay[:, col, 0] = 1.0  # R
+            overlay[:, col, 3] = normalized_error[col] * 0.7  # alpha
+
+        true_valid = true >= 0
+        pred_valid = pred >= 0
+
+        ax_spec = axes[row, 0]
+        ax_spec.imshow(
+            spec, aspect="auto", cmap="viridis", extent=extent, origin="upper"
+        )
+        ax_spec.plot(
+            freqs[true_valid],
+            waven[true[true_valid].astype(int)],
+            "r-",
+            linewidth=2,
+            label="True",
+        )
+        ax_spec.plot(
+            freqs[pred_valid],
+            waven[pred[pred_valid].astype(int)],
+            "g--",
+            linewidth=1.5,
+            label="Predicted",
+        )
+        ax_spec.set_xlabel("Frequency (Hz)" if meta else "Frequency index")
+        ax_spec.set_ylabel("Wavenumber (1/m)" if meta else "Wavenumber index")
+        title = meta.get("spectrum_id", f"Sample {idx}") if meta else f"Sample {idx}"
+        ax_spec.set_title(f"{title} — Spectrum")
+        ax_spec.legend()
+
+        ax_err = axes[row, 1]
+        ax_err.imshow(
+            spec, aspect="auto", cmap="viridis", extent=extent, origin="upper"
+        )
+        ax_err.imshow(overlay, aspect="auto", extent=extent, origin="upper")
+        ax_err.plot(
+            freqs[true_valid],
+            waven[true[true_valid].astype(int)],
+            "c-",
+            linewidth=2,
+            label="True",
+        )
+        ax_err.plot(
+            freqs[pred_valid],
+            waven[pred[pred_valid].astype(int)],
+            "g--",
+            linewidth=1.5,
+            label="Predicted",
+        )
+        ax_err.set_xlabel("Frequency (Hz)" if meta else "Frequency index")
+        ax_err.set_ylabel("Wavenumber (1/m)" if meta else "Wavenumber index")
+        ax_err.set_title(f"{title} — Pick Error Overlay (max={max_err:.1f}px)")
+        ax_err.legend()
+
+    plt.tight_layout()
+    if save_path is not None:
+        save_path.parent.mkdir(parents=True, exist_ok=True)
+        plt.savefig(save_path, dpi=300, bbox_inches="tight")
+        plt.close(fig)
+    else:
+        plt.show()

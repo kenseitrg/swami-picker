@@ -21,7 +21,12 @@ from src.evaluation.picking_metrics import (
     compute_curve_rmse,
     compute_presence_f1,
 )
-from src.evaluation.visualize_picking import plot_curve_overlays, plot_training_curves
+from src.evaluation.visualize_picking import (
+    plot_curve_overlays,
+    plot_certainty_distributions,
+    plot_probability_heatmap_overlay,
+    plot_training_curves,
+)
 from src.models.picking_model import inference_picks
 from src.training.picking_loss import PickingLoss
 from src.training.scheduler import get_cosine_schedule_with_warmup
@@ -371,6 +376,8 @@ class PickingTrainer:
         all_true: list[torch.Tensor] = []
         all_pred: list[torch.Tensor] = []
         all_probs: list[torch.Tensor] = []
+        all_logits: list[torch.Tensor] = []
+        all_presence_targets: list[torch.Tensor] = []
 
         for batch in self.val_loader:
             (
@@ -428,6 +435,8 @@ class PickingTrainer:
                 all_true.append(pick_target.cpu())
                 all_pred.append(pred_picks.cpu())
                 all_probs.append(pred_probs.cpu())
+                all_logits.append(pick_logits.cpu())
+                all_presence_targets.append(presence_target.cpu())
 
         if num_batches == 0:
             logger.warning("Validation loader is empty; returning NaN metrics.")
@@ -450,6 +459,9 @@ class PickingTrainer:
             vis_true = torch.cat(all_true, dim=0)[:6]
             vis_pred = torch.cat(all_pred, dim=0)[:6]
             vis_probs = torch.cat(all_probs, dim=0)[:6]
+            vis_logits = torch.cat(all_logits, dim=0)[:6]
+            vis_presence_targets = torch.cat(all_presence_targets, dim=0)[:6]
+
             plot_curve_overlays(
                 vis_spectra,
                 vis_true,
@@ -458,6 +470,22 @@ class PickingTrainer:
                 save_path=self.plots_dir
                 / f"curve_predictions_epoch_{epoch_1based:03d}.png",
                 seed=self.config.seed,
+            )
+            plot_probability_heatmap_overlay(
+                vis_spectra,
+                vis_true,
+                vis_pred,
+                vis_logits,
+                vis_probs,
+                save_path=self.plots_dir
+                / f"probability_heatmaps_epoch_{epoch_1based:03d}.png",
+                seed=self.config.seed,
+            )
+            plot_certainty_distributions(
+                vis_probs,
+                true_presence=vis_presence_targets,
+                save_path=self.plots_dir
+                / f"certainty_distributions_epoch_{epoch_1based:03d}.png",
             )
 
         return {
