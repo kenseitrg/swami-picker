@@ -9,12 +9,13 @@ val_seed: 42
 min_direct_picks: 3
 use_cluster_conditioning: false
 cluster_embedding_path: null
+cluster_embed_dim: 128
 
 # Model
 backbone: "unet"      # "unet" or "encoder_decoder"
 base_channels: 32
 embed_dim: 128
-num_classes: 256      # wavenumber bins per frequency column
+spectrum_height: 256  # must match model input height (wavenumber bins)
 
 # Augmentation (pick-synchronized)
 aug_enabled: true
@@ -22,19 +23,17 @@ aug_noise_std: 0.05
 aug_intensity_jitter: 0.15
 aug_freq_shift_max: 0.05   # horizontal shift, picks move with image
 aug_waven_shift_max: 0.03  # vertical shift, picks move with image
-aug_hflip: false           # dispersion curves are not symmetric
 
 # Training
 batch_size: 16
 accum_steps: 1
 epochs: 100
 lr: 1.0e-3
-backbone_lr: 5.0e-5
 weight_decay: 0.05
 betas: [0.9, 0.95]
 warmup_ratio: 0.1
 grad_clip_norm: 1.0
-loss_l1_weight: 1.0
+loss_pick_weight: 1.0  # weight for the wavenumber cross-entropy loss
 loss_bce_weight: 0.5
 direct_pick_weight: 2.0
 seed: 42

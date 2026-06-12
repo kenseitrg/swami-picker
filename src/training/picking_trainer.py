@@ -25,7 +25,7 @@ from src.evaluation.visualize_picking import plot_curve_overlays, plot_training_
 from src.models.picking_model import inference_picks
 from src.training.picking_loss import PickingLoss
 from src.training.scheduler import get_cosine_schedule_with_warmup
-from src.utils.checkpoint import load_checkpoint, save_checkpoint
+from src.utils.checkpoint import load_checkpoint, restore_rng_state, save_checkpoint
 
 logger = logging.getLogger(__name__)
 
@@ -90,7 +90,7 @@ class PickingTrainer:
         self.argv = argv
 
         self.criterion = PickingLoss(
-            l1_weight=config.loss_l1_weight,
+            pick_weight=config.loss_pick_weight,
             bce_weight=config.loss_bce_weight,
             direct_pick_weight=config.direct_pick_weight,
         )
@@ -116,9 +116,8 @@ class PickingTrainer:
         Returns:
             Configured ``AdamW`` instance.
         """
-        # Separate parameter groups if backbone_lr differs from head LR.
-        # For now, all parameters share the same LR because the model is
-        # trained end-to-end from scratch.
+        # The model is trained end-to-end from scratch, so all parameters
+        # share the same learning rate.
         return torch.optim.AdamW(
             self.model.parameters(),
             lr=self.config.lr,
@@ -475,12 +474,6 @@ class PickingTrainer:
             epoch: 0-based index of the just-completed epoch.
             is_best: Whether this checkpoint is the best so far.
         """
-        rng_state = {
-            "torch": torch.get_rng_state(),
-            "cuda": torch.cuda.get_rng_state_all()
-            if self.device.type == "cuda"
-            else None,
-        }
         state = {
             "model": self.model.state_dict(),
             "optimizer": self.optimizer.state_dict(),
@@ -491,7 +484,6 @@ class PickingTrainer:
             "seed": self.config.seed,
             "config": self.config.to_dict(),
             "metrics": {"best_val_rmse": self.best_val_rmse},
-            "rng_state": rng_state,
             "argv": self.argv,
         }
         path = self.checkpoint_dir / f"checkpoint_epoch_{epoch + 1:03d}.pt"
@@ -516,11 +508,7 @@ class PickingTrainer:
         )
 
         rng_state = checkpoint.get("rng_state")
-        if rng_state is not None:
-            torch.set_rng_state(rng_state["torch"].cpu())
-            cuda_rng = rng_state.get("cuda")
-            if cuda_rng is not None and self.device.type == "cuda":
-                torch.cuda.set_rng_state_all([s.cpu() for s in cuda_rng])
+        restore_rng_state(rng_state)
 
         logger.info(
             "Resumed from epoch %d, step %d",

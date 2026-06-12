@@ -18,22 +18,20 @@ class PickingLoss(nn.Module):
 
     def __init__(
         self,
-        l1_weight: float = 1.0,
+        pick_weight: float = 1.0,
         bce_weight: float = 0.5,
         direct_pick_weight: float = 2.0,
     ) -> None:
         """Initialize the loss.
 
         Args:
-            l1_weight: Weight for the pick cross-entropy loss.  The name
-                is kept for config compatibility; the loss is cross-entropy,
-                not L1.
+            pick_weight: Weight for the wavenumber cross-entropy loss.
             bce_weight: Weight for the presence BCE loss.
             direct_pick_weight: Multiplicative weight for direct picks
                 relative to interpolated picks.
         """
         super().__init__()
-        self.l1_weight = l1_weight
+        self.pick_weight = pick_weight
         self.bce_weight = bce_weight
         self.direct_pick_weight = direct_pick_weight
 
@@ -83,7 +81,9 @@ class PickingLoss(nn.Module):
         weights = torch.where(direct_mask, self.direct_pick_weight, 1.0)
         ce = ce * weights * presence_target * valid.float()
 
-        normalizer = presence_target.sum() + eps
+        # Use a weighted normalizer so the effective direct-pick weight is
+        # exactly ``direct_pick_weight`` relative to interpolated picks.
+        normalizer = (weights * presence_target * valid.float()).sum() + eps
         pick_loss = ce.sum() / normalizer
 
         # Presence loss: one logit per frequency column.
@@ -94,7 +94,7 @@ class PickingLoss(nn.Module):
             reduction="mean",
         )
 
-        total_loss = self.l1_weight * pick_loss + self.bce_weight * presence_loss
+        total_loss = self.pick_weight * pick_loss + self.bce_weight * presence_loss
 
         loss_dict = {
             "pick_loss": pick_loss.detach(),

@@ -62,6 +62,10 @@ def compute_presence_f1(
     precision = tp / (tp + fp + 1e-6)
     recall = tp / (tp + fn + 1e-6)
     f1 = 2 * precision * recall / (precision + recall + 1e-6)
+    # Handle all-zero rows (no mode visible): define F1 as 1.0 when both
+    # prediction and target agree there is no mode.
+    all_zero = (tp == 0) & (fp == 0) & (fn == 0)
+    f1 = torch.where(all_zero, torch.tensor(1.0, device=f1.device), f1)
     return f1.mean()
 
 
@@ -81,16 +85,18 @@ def compute_velocity_error(
             ``freq_axis_resized`` and ``waven_axis_resized``.
 
     Returns:
-        Tuple of ``(delta_v_over_v, valid_mask)`` where ``delta_v_over_v``
-        is an array of relative velocity errors and ``valid_mask`` is a
-        boolean array indicating columns where both picks are valid.
+        Tuple of ``(delta_v_over_v, velocity_valid_mask)`` where
+        ``delta_v_over_v`` is an array of relative velocity errors and
+        ``velocity_valid_mask`` is a boolean array of the same length as
+        *delta_v_over_v*, indicating columns where velocities could be
+        computed (positive frequency and wavenumber).
     """
     freq_axis = np.asarray(metadata["freq_axis_resized"])
     waven_axis = np.asarray(metadata["waven_axis_resized"])
 
     valid = (pred_picks >= 0) & (true_picks >= 0)
     if not valid.any():
-        return np.array([]), valid
+        return np.array([]), np.array([], dtype=bool)
 
     f_pred = freq_axis[valid]
     f_true = freq_axis[valid]
@@ -103,7 +109,7 @@ def compute_velocity_error(
     v_true = f_true[v_mask] / k_true[v_mask]
 
     delta_v_over_v = np.abs(v_pred - v_true) / v_true
-    return delta_v_over_v, valid
+    return delta_v_over_v, v_mask
 
 
 def compute_coverage(picks: torch.Tensor) -> torch.Tensor:

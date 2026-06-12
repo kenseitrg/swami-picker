@@ -199,8 +199,8 @@ class EncoderDecoderPickingModel(nn.Module):
 class ClusterConditionalPickingModel(nn.Module):
     """U-Net picking model conditioned on a cluster embedding vector.
 
-    The 128-D cluster embedding is broadcast to the bottleneck spatial
-    resolution and concatenated with the encoder features before the
+    The cluster embedding is projected and broadcast to the bottleneck
+    spatial resolution, then added to the encoder features before the
     decoder.  This provides a learned prior per spectral type.
     """
 
@@ -296,7 +296,9 @@ def build_picking_model(config) -> nn.Module:
     if config.backbone == "unet":
         if config.use_cluster_conditioning:
             return ClusterConditionalPickingModel(
-                base_channels=base_channels, embed_dim=embed_dim
+                base_channels=base_channels,
+                embed_dim=embed_dim,
+                cluster_embed_dim=config.cluster_embed_dim,
             )
         return SimpleUNetPickingModel(base_channels=base_channels, embed_dim=embed_dim)
 

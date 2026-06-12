@@ -6,6 +6,8 @@ image and the ground-truth pick target consistently.
 
 from __future__ import annotations
 
+from collections.abc import Callable
+
 import torch
 
 
@@ -93,10 +95,14 @@ class FreqShift:
         confidence, _ = _roll_with_fill(confidence, shift, dim=0)
 
         # Mark rolled-in columns as unpicked.
-        pick_target = pick_target.where(valid, torch.tensor(-1.0))
-        presence_target = presence_target.where(valid, torch.tensor(0.0))
-        direct_mask = direct_mask.where(valid, torch.tensor(False))
-        confidence = confidence.where(valid, torch.tensor(0.0))
+        pick_target = pick_target.where(valid, torch.full_like(pick_target, -1.0))
+        presence_target = presence_target.where(
+            valid, torch.zeros_like(presence_target)
+        )
+        direct_mask = direct_mask.where(
+            valid, torch.zeros_like(direct_mask, dtype=torch.bool)
+        )
+        confidence = confidence.where(valid, torch.zeros_like(confidence))
 
         return spectrum, pick_target, presence_target, direct_mask, confidence
 
@@ -158,10 +164,14 @@ class WavenShift:
         )
         valid = valid & ~out_of_bounds
 
-        pick_target = shifted.where(valid, torch.tensor(-1.0))
-        presence_target = presence_target.where(valid, torch.tensor(0.0))
-        direct_mask = direct_mask.where(valid, torch.tensor(False))
-        confidence = confidence.where(valid, torch.tensor(0.0))
+        pick_target = shifted.where(valid, torch.full_like(pick_target, -1.0))
+        presence_target = presence_target.where(
+            valid, torch.zeros_like(presence_target)
+        )
+        direct_mask = direct_mask.where(
+            valid, torch.zeros_like(direct_mask, dtype=torch.bool)
+        )
+        confidence = confidence.where(valid, torch.zeros_like(confidence))
 
         return spectrum, pick_target, presence_target, direct_mask, confidence
 
@@ -245,8 +255,18 @@ class PickSyncTransform:
             waven_shift_max: Maximum vertical shift fraction.
         """
         self.enabled = enabled
+        transform_type = Callable[
+            [
+                torch.Tensor,
+                torch.Tensor,
+                torch.Tensor,
+                torch.Tensor,
+                torch.Tensor,
+            ],
+            tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor],
+        ]
         if enabled:
-            self.transforms: list = [
+            self.transforms: list[transform_type] = [
                 IntensityJitter(intensity_jitter),
                 GaussianNoise(noise_std),
                 FreqShift(freq_shift_max),

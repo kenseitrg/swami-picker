@@ -36,7 +36,7 @@ def test_picking_config_default_loads_from_project_yaml() -> None:
     config = PickingConfig.from_yaml(path)
 
     assert config.backbone in {"unet", "encoder_decoder"}
-    assert config.num_classes == 256
+    assert config.spectrum_height == 256
     assert config.val_fraction > 0 and config.val_fraction < 1
     assert isinstance(config.visualization_epochs, list)
 

@@ -387,12 +387,13 @@ class PickingConfig:
     min_direct_picks: int = 3
     use_cluster_conditioning: bool = False
     cluster_embedding_path: str | None = None
+    cluster_embed_dim: int = 128
 
     # Model
     backbone: str = "unet"  # "unet" or "encoder_decoder"
     base_channels: int = 32
     embed_dim: int = 128
-    num_classes: int = 256  # per-frequency wavenumber bins
+    spectrum_height: int = 256  # must match model input height (wavenumber bins)
 
     # Augmentation (pick-synchronized)
     aug_enabled: bool = True
@@ -400,19 +401,17 @@ class PickingConfig:
     aug_intensity_jitter: float = 0.15
     aug_freq_shift_max: float = 0.05
     aug_waven_shift_max: float = 0.03
-    aug_hflip: bool = False
 
     # Training
     batch_size: int = 16
     accum_steps: int = 1
     epochs: int = 100
     lr: float = 1e-3
-    backbone_lr: float = 5e-5
     weight_decay: float = 0.05
     betas: tuple[float, float] = (0.9, 0.95)
     warmup_ratio: float = 0.1
     grad_clip_norm: float = 1.0
-    loss_l1_weight: float = 1.0
+    loss_pick_weight: float = 1.0  # weight for the wavenumber cross-entropy loss
     loss_bce_weight: float = 0.5
     direct_pick_weight: float = 2.0
     seed: int = 42
