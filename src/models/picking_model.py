@@ -86,11 +86,11 @@ class SimpleUNetPickingModel(nn.Module):
         self.up3 = nn.ConvTranspose2d(embed_dim, embed_dim, kernel_size=2, stride=2)
         self.dec3 = ConvBlock(embed_dim * 2, embed_dim)
         self.up2 = nn.ConvTranspose2d(
-            embed_dim, embed_dim // 2, kernel_size=2, stride=2
+            embed_dim, base_channels * 2, kernel_size=2, stride=2
         )
-        self.dec2 = ConvBlock(embed_dim, embed_dim // 2)
+        self.dec2 = ConvBlock(base_channels * 4, base_channels * 2)
         self.up1 = nn.ConvTranspose2d(
-            embed_dim // 2, base_channels, kernel_size=2, stride=2
+            base_channels * 2, base_channels, kernel_size=2, stride=2
         )
         self.dec1 = ConvBlock(base_channels * 2, base_channels)
 
@@ -109,20 +109,20 @@ class SimpleUNetPickingModel(nn.Module):
             ``(B, 1, 256, 256)``.
         """
         # Encoder
-        e1 = self.enc1(x)  # (B, 32, 256, 256)
-        e2 = self.enc2(self.pool1(e1))  # (B, 64, 128, 128)
-        e3 = self.enc3(self.pool2(e2))  # (B, 128, 64, 64)
+        e1 = self.enc1(x)  # (B, base_channels, 256, 256)
+        e2 = self.enc2(self.pool1(e1))  # (B, base_channels*2, 128, 128)
+        e3 = self.enc3(self.pool2(e2))  # (B, embed_dim, 64, 64)
 
         # Bottleneck
-        b = self.bottleneck(self.pool3(e3))  # (B, 128, 32, 32)
+        b = self.bottleneck(self.pool3(e3))  # (B, embed_dim, 32, 32)
 
         # Decoder with skip connections
-        d3 = self.up3(b)  # (B, 128, 64, 64)
-        d3 = self.dec3(torch.cat([d3, e3], dim=1))  # (B, 128, 64, 64)
-        d2 = self.up2(d3)  # (B, 64, 128, 128)
-        d2 = self.dec2(torch.cat([d2, e2], dim=1))  # (B, 64, 128, 128)
-        d1 = self.up1(d2)  # (B, 32, 256, 256)
-        d1 = self.dec1(torch.cat([d1, e1], dim=1))  # (B, 32, 256, 256)
+        d3 = self.up3(b)  # (B, embed_dim, 64, 64)
+        d3 = self.dec3(torch.cat([d3, e3], dim=1))  # (B, embed_dim, 64, 64)
+        d2 = self.up2(d3)  # (B, base_channels*2, 128, 128)
+        d2 = self.dec2(torch.cat([d2, e2], dim=1))  # (B, base_channels*2, 128, 128)
+        d1 = self.up1(d2)  # (B, base_channels, 256, 256)
+        d1 = self.dec1(torch.cat([d1, e1], dim=1))  # (B, base_channels, 256, 256)
 
         pick_logits = self.pick_head(d1)  # (B, 1, 256, 256)
         presence_logits = self.presence_head(d1)  # (B, 1, 256, 256)
