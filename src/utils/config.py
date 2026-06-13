@@ -413,6 +413,7 @@ class PickingConfig:
     loss_pick_weight: float = 1.0
     direct_pick_weight: float = 2.0
     loss_smooth_weight: float = 0.0  # weight for frequency-axis smoothness loss
+    min_val_coverage: float = 0.05  # minimum predicted val coverage for best checkpoint
     early_stopping_patience: int = 15
     smooth_window: int = 5  # epochs for moving-average val metric smoothing
     seed: int = 42

@@ -10,10 +10,10 @@ k_folds: 5
 fold_index: 0
 
 # Model
-base_channels: 8
+base_channels: 12
 embed_dim: 64
 spectrum_height: 256
-dropout: 0.3
+dropout: 0.5
 
 # Augmentation (pick-synchronized; shifts disabled)
 aug_enabled: true
@@ -34,6 +34,7 @@ grad_clip_norm: 1.0
 loss_pick_weight: 1.0
 direct_pick_weight: 2.0
 loss_smooth_weight: 0.05
+min_val_coverage: 0.05
 early_stopping_patience: 15
 smooth_window: 5
 seed: 42

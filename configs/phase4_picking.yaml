@@ -35,6 +35,7 @@ grad_clip_norm: 1.0
 loss_pick_weight: 1.0
 direct_pick_weight: 2.0
 loss_smooth_weight: 0.05
+min_val_coverage: 0.05
 early_stopping_patience: 15
 smooth_window: 5
 seed: 42

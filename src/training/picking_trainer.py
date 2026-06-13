@@ -170,6 +170,9 @@ class PickingTrainer:
 
             # Smoothed metric for checkpoint selection.
             val_rmse = val_metrics["val_rmse_pixels"]
+            val_coverage = val_metrics.get("val_coverage", 1.0)
+            min_coverage = getattr(self.config, "min_val_coverage", 0.0)
+            coverage_ok = val_coverage >= min_coverage
             if math.isfinite(val_rmse) and val_rmse > 0.0:
                 self.val_metric_history.append(val_rmse)
             smoothed_metric = (
@@ -179,7 +182,8 @@ class PickingTrainer:
             )
 
             is_best = (
-                math.isfinite(smoothed_metric)
+                coverage_ok
+                and math.isfinite(smoothed_metric)
                 and smoothed_metric < self.best_val_metric
             )
             if is_best:

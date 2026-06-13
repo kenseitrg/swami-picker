@@ -158,3 +158,51 @@ def test_trainer_resume(tiny_picking_loaders, tmp_path: Path) -> None:
 
     lines = (run_dir / "metrics.jsonl").read_text().strip().split("\n")
     assert len(lines) == 2
+
+
+def test_trainer_skips_low_coverage_checkpoint(
+    tiny_picking_loaders, tmp_path: Path
+) -> None:
+    """Checkpoints with predicted coverage below threshold are not selected as best."""
+    train_loader, val_loader = tiny_picking_loaders
+
+    config = PickingConfig(
+        base_channels=8,
+        embed_dim=16,
+        spectrum_height=256,
+        epochs=2,
+        batch_size=4,
+        accum_steps=1,
+        lr=1e-3,
+        log_interval=1,
+        visualization_epochs=[],
+        aug_enabled=False,
+        smooth_window=1,
+        min_val_coverage=0.99,  # impossible to reach with this toy data
+    )
+
+    model = PickingModel(
+        in_channels=1,
+        base_channels=config.base_channels,
+        embed_dim=config.embed_dim,
+        spectrum_height=config.spectrum_height,
+    )
+
+    device = torch.device("cpu")
+    checkpoint_dir = tmp_path / "checkpoints"
+    run_dir = tmp_path / "run"
+
+    trainer = PickingTrainer(
+        model=model,
+        config=config,
+        device=device,
+        train_loader=train_loader,
+        val_loader=val_loader,
+        checkpoint_dir=checkpoint_dir,
+        run_dir=run_dir,
+    )
+    trainer.train()
+
+    # No best checkpoint should have been selected because coverage was too low.
+    assert trainer.best_checkpoint_path is None
+    assert trainer.best_val_metric == float("inf")
