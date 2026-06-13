@@ -6,6 +6,7 @@ from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
 import matplotlib as _mpl
+
 _mpl.use("Agg")
 
 import matplotlib as mpl
@@ -42,9 +43,7 @@ def _compute_similarity_metrics(
     embeddings_t = torch.from_numpy(embeddings).float()
     embeddings_norm = torch.nn.functional.normalize(embeddings_t, dim=1)
 
-    class_embs = {
-        int(ln): embeddings_norm[line_numbers == ln] for ln in unique_lines
-    }
+    class_embs = {int(ln): embeddings_norm[line_numbers == ln] for ln in unique_lines}
 
     sim_matrix = np.zeros((n_lines, n_lines), dtype=np.float64)
     for i, li in enumerate(unique_lines):

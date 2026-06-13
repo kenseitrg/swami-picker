@@ -46,26 +46,17 @@ class AnnotationRecord:
             ("confidence", self.confidence),
         ):
             if arr.shape != expected:
-                msg = (
-                    f"{name} must have shape {expected}, got {arr.shape}"
-                )
+                msg = f"{name} must have shape {expected}, got {arr.shape}"
                 raise ValueError(msg)
 
         if self.wavenumber_picks.dtype != np.int16:
-            msg = (
-                f"wavenumber_picks must be int16, got "
-                f"{self.wavenumber_picks.dtype}"
-            )
+            msg = f"wavenumber_picks must be int16, got {self.wavenumber_picks.dtype}"
             raise ValueError(msg)
         if self.direct_mask.dtype != bool:
-            msg = (
-                f"direct_mask must be bool, got {self.direct_mask.dtype}"
-            )
+            msg = f"direct_mask must be bool, got {self.direct_mask.dtype}"
             raise ValueError(msg)
         if self.confidence.dtype != np.float32:
-            msg = (
-                f"confidence must be float32, got {self.confidence.dtype}"
-            )
+            msg = f"confidence must be float32, got {self.confidence.dtype}"
             raise ValueError(msg)
 
 
@@ -178,9 +169,7 @@ def create_session_manifest(
         "annotator": annotator,
         "percentage_per_cluster": percentage,
         "total_target": sum(per_cluster_target.values()),
-        "per_cluster_target": {
-            str(k): v for k, v in per_cluster_target.items()
-        },
+        "per_cluster_target": {str(k): v for k, v in per_cluster_target.items()},
         "spectra_ordered": spectra_ordered,
         "query_strategy": query_strategy,
         "annotations_dir": str(annotations_dir),

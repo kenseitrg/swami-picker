@@ -18,8 +18,8 @@ def synthetic_data() -> tuple[np.ndarray, np.ndarray, np.ndarray]:
     # v0 closest to centroid, v1 middle, v2 farthest.
     cluster0 = np.array(
         [
-            [0.9, 0.1, 0.0],   # closest after normalisation
-            [1.0, 0.0, 0.0],   # middle
+            [0.9, 0.1, 0.0],  # closest after normalisation
+            [1.0, 0.0, 0.0],  # middle
             [0.5, 0.5, 0.707],  # farthest (≈ [1,1,1] normalised)
         ],
         dtype=np.float32,

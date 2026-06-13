@@ -105,10 +105,13 @@ class FKSpectrumTransform:
                     tensor[:, shift_px:, :] = 0.0
 
         # 3. Frequency-band dropout
-        if self.freq_dropout_prob > 0.0 and torch.rand(1).item() < self.freq_dropout_prob:
+        if (
+            self.freq_dropout_prob > 0.0
+            and torch.rand(1).item() < self.freq_dropout_prob
+        ):
             band_width = max(1, int(tensor.shape[2] * self.freq_dropout_width))
             start = torch.randint(0, tensor.shape[2] - band_width + 1, (1,)).item()
-            tensor[:, :, start:start + band_width] = 0.0
+            tensor[:, :, start : start + band_width] = 0.0
 
         # 4. Intensity jitter
         if self.intensity_jitter > 0.0:

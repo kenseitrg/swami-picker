@@ -48,9 +48,7 @@ def test_plot_curve_overlays_creates_file(sample_data, tmp_path: Path):
     """Curve overlay figure is written to disk."""
     spectra, true_picks, pred_picks, _, _, _ = sample_data
     save_path = tmp_path / "curves.png"
-    plot_curve_overlays(
-        spectra, true_picks, pred_picks, save_path=save_path, seed=1
-    )
+    plot_curve_overlays(spectra, true_picks, pred_picks, save_path=save_path, seed=1)
     assert save_path.exists()
     assert save_path.stat().st_size > 0
 

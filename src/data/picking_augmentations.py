@@ -12,14 +12,15 @@ import torch
 
 
 def _roll_with_fill(
-    tensor: torch.Tensor, shift: int, dim: int
+    tensor: torch.Tensor, shift: int, dim: int, fill_value: float = 0.0
 ) -> tuple[torch.Tensor, torch.Tensor]:
-    """Roll a tensor along *dim* and return a mask of valid positions.
+    """Roll a tensor along *dim* and zero-fill wrapped positions.
 
     Args:
         tensor: Input tensor of any shape.
         shift: Number of positions to roll (positive = forward).
         dim: Dimension along which to roll.
+        fill_value: Value to write into wrapped positions.
 
     Returns:
         A tuple of ``(rolled_tensor, valid_mask)`` where ``valid_mask``
@@ -39,6 +40,10 @@ def _roll_with_fill(
         slices = [slice(None)] * tensor.ndim
         slices[dim] = slice(shift, None)
         valid[tuple(slices)] = False
+
+    if not torch.all(valid):
+        fill_mask = ~valid
+        rolled = torch.where(fill_mask, torch.full_like(rolled, fill_value), rolled)
 
     return rolled, valid
 
@@ -88,7 +93,7 @@ class FreqShift:
         if shift == 0:
             return spectrum, pick_target, presence_target, direct_mask, confidence
 
-        spectrum, _ = _roll_with_fill(spectrum, shift, dim=2)
+        spectrum, _ = _roll_with_fill(spectrum, shift, dim=2, fill_value=0.0)
         pick_target, valid = _roll_with_fill(pick_target, shift, dim=0)
         presence_target, _ = _roll_with_fill(presence_target, shift, dim=0)
         direct_mask, _ = _roll_with_fill(direct_mask, shift, dim=0)
@@ -152,7 +157,7 @@ class WavenShift:
         if shift == 0:
             return spectrum, pick_target, presence_target, direct_mask, confidence
 
-        spectrum, _ = _roll_with_fill(spectrum, shift, dim=1)
+        spectrum, _ = _roll_with_fill(spectrum, shift, dim=1, fill_value=0.0)
 
         valid = torch.ones_like(pick_target, dtype=torch.bool)
         shifted = pick_target + float(shift)

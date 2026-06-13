@@ -167,7 +167,9 @@ def main(argv: list[str] | None = None) -> int:
     )
     trainer.train()
 
-    logger.info("Training complete. Best smoothed val_rmse=%.4f", trainer.best_val_metric)
+    logger.info(
+        "Training complete. Best smoothed val_rmse=%.4f", trainer.best_val_metric
+    )
     return 0
 
 

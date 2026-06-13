@@ -7,7 +7,12 @@ from pathlib import Path
 
 import yaml
 
-SCRIPT = Path(__file__).resolve().parents[1] / "scripts" / "phase3_active_learning" / "prepare_session.py"
+SCRIPT = (
+    Path(__file__).resolve().parents[1]
+    / "scripts"
+    / "phase3_active_learning"
+    / "prepare_session.py"
+)
 
 
 class TestPrepareSessionIntegration:
@@ -20,11 +25,15 @@ class TestPrepareSessionIntegration:
             [
                 sys.executable,
                 str(SCRIPT),
-                "--percentage", "5.0",
+                "--percentage",
+                "5.0",
                 "--yes",
-                "--name", "test-session",
-                "--output-dir", str(output_dir),
-                "--seed", "123",
+                "--name",
+                "test-session",
+                "--output-dir",
+                str(output_dir),
+                "--seed",
+                "123",
             ],
             capture_output=True,
             text=True,
@@ -71,10 +80,13 @@ class TestPrepareSessionIntegration:
             [
                 sys.executable,
                 str(SCRIPT),
-                "--percentage", "5.0",
+                "--percentage",
+                "5.0",
                 "--yes",
-                "--name", "no-interleave",
-                "--output-dir", str(output_dir),
+                "--name",
+                "no-interleave",
+                "--output-dir",
+                str(output_dir),
                 "--no-interleave",
             ],
             capture_output=True,
@@ -93,7 +105,8 @@ class TestPrepareSessionIntegration:
             [
                 sys.executable,
                 str(SCRIPT),
-                "--embeddings", str(tmp_path / "missing.npz"),
+                "--embeddings",
+                str(tmp_path / "missing.npz"),
                 "--yes",
             ],
             capture_output=True,

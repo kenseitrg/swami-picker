@@ -217,7 +217,9 @@ class PickingTrainer:
             if self.device.type == "cuda":
                 torch.cuda.reset_peak_memory_stats(self.device)
 
-        logger.info("Training complete. Best smoothed val_rmse=%.4f", self.best_val_metric)
+        logger.info(
+            "Training complete. Best smoothed val_rmse=%.4f", self.best_val_metric
+        )
 
         plot_training_curves(
             self.metrics_logger.path,
@@ -236,11 +238,22 @@ class PickingTrainer:
         self.optimizer.zero_grad(set_to_none=True)
 
         for batch_idx, batch in enumerate(self.train_loader):
-            spectra, pick_target, direct_mask, _confidence, _cluster_label, _spectrum_id = batch
+            (
+                spectra,
+                pick_target,
+                direct_mask,
+                _confidence,
+                _cluster_label,
+                _spectrum_id,
+            ) = batch
 
             spectra = spectra.to(self.device, non_blocking=self.config.pin_memory)
-            pick_target = pick_target.to(self.device, non_blocking=self.config.pin_memory)
-            direct_mask = direct_mask.to(self.device, non_blocking=self.config.pin_memory)
+            pick_target = pick_target.to(
+                self.device, non_blocking=self.config.pin_memory
+            )
+            direct_mask = direct_mask.to(
+                self.device, non_blocking=self.config.pin_memory
+            )
 
             with self._autocast_context():
                 logits = self.model(spectra)
@@ -318,11 +331,22 @@ class PickingTrainer:
         all_logits: list[torch.Tensor] = []
 
         for batch in self.val_loader:
-            spectra, pick_target, direct_mask, _confidence, _cluster_label, _spectrum_id = batch
+            (
+                spectra,
+                pick_target,
+                direct_mask,
+                _confidence,
+                _cluster_label,
+                _spectrum_id,
+            ) = batch
 
             spectra = spectra.to(self.device, non_blocking=self.config.pin_memory)
-            pick_target = pick_target.to(self.device, non_blocking=self.config.pin_memory)
-            direct_mask = direct_mask.to(self.device, non_blocking=self.config.pin_memory)
+            pick_target = pick_target.to(
+                self.device, non_blocking=self.config.pin_memory
+            )
+            direct_mask = direct_mask.to(
+                self.device, non_blocking=self.config.pin_memory
+            )
 
             logits = self.model(spectra)
             loss, _ = self.criterion(logits, pick_target, direct_mask)

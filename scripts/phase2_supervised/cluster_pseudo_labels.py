@@ -7,6 +7,7 @@ import sys
 from pathlib import Path
 
 import matplotlib
+
 matplotlib.use("Agg")
 import matplotlib.pyplot as plt
 import numpy as np
@@ -74,8 +75,7 @@ def _validate_finite(features: np.ndarray) -> None:
     if not np.all(np.isfinite(features)):
         n_bad = int(np.sum(~np.isfinite(features)))
         raise ValueError(
-            f"Feature matrix contains {n_bad} non-finite values. "
-            "Aborting clustering."
+            f"Feature matrix contains {n_bad} non-finite values. Aborting clustering."
         )
 
 
@@ -272,7 +272,12 @@ def main(argv: list[str] | None = None) -> int:
     unique_clusters = sorted({int(lbl) for lbl in labels if lbl != -1})
     n_clusters = len(unique_clusters)
 
-    logger.info("HDBSCAN found %d clusters, noise=%d (%.2f%%)", n_clusters, n_noise, noise_fraction * 100)
+    logger.info(
+        "HDBSCAN found %d clusters, noise=%d (%.2f%%)",
+        n_clusters,
+        n_noise,
+        noise_fraction * 100,
+    )
 
     # Silhouette on core (non-noise) points
     silhouette_val: float | None = None

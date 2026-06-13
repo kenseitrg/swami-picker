@@ -106,9 +106,7 @@ class VICRegTrainer:
         )
 
     def _setup_scheduler(self) -> torch.optim.lr_scheduler.LambdaLR:
-        steps_per_epoch = math.ceil(
-            len(self.train_loader) / self.config.accum_steps
-        )
+        steps_per_epoch = math.ceil(len(self.train_loader) / self.config.accum_steps)
         total_steps = steps_per_epoch * self.config.epochs
         warmup_steps = int(total_steps * self.config.warmup_ratio)
 
@@ -149,9 +147,7 @@ class VICRegTrainer:
 
             max_vram_mb = 0.0
             if self.device.type == "cuda":
-                max_vram_mb = (
-                    torch.cuda.max_memory_allocated(self.device) / (1024**2)
-                )
+                max_vram_mb = torch.cuda.max_memory_allocated(self.device) / (1024**2)
                 torch.cuda.empty_cache()
 
             metrics = {
@@ -222,8 +218,12 @@ class VICRegTrainer:
             images = images.to(self.device, non_blocking=self.config.pin_memory)
 
             # Generate two independently augmented views
-            x1 = torch.stack([self.transform(img.unsqueeze(0)).squeeze(0) for img in images])
-            x2 = torch.stack([self.transform(img.unsqueeze(0)).squeeze(0) for img in images])
+            x1 = torch.stack(
+                [self.transform(img.unsqueeze(0)).squeeze(0) for img in images]
+            )
+            x2 = torch.stack(
+                [self.transform(img.unsqueeze(0)).squeeze(0) for img in images]
+            )
 
             with self._autocast_context():
                 z1 = self.model(x1)
@@ -271,9 +271,7 @@ class VICRegTrainer:
             total_cov += cov_loss.item()
             num_batches += 1
 
-            pbar.set_postfix(
-                {"loss": f"{loss.item() * self.config.accum_steps:.4f}"}
-            )
+            pbar.set_postfix({"loss": f"{loss.item() * self.config.accum_steps:.4f}"})
 
         pbar.close()
 
@@ -332,9 +330,7 @@ class VICRegTrainer:
             # Need at least 2 unique labels and enough samples
             unique_labels = np.unique(line_numbers)
             if len(unique_labels) >= 2 and len(embeddings) >= len(unique_labels) * 2:
-                silhouette = float(
-                    silhouette_score(embeddings, line_numbers)
-                )
+                silhouette = float(silhouette_score(embeddings, line_numbers))
         except Exception:
             pass
 
@@ -362,9 +358,7 @@ class VICRegTrainer:
         rng_state = {
             "torch": torch.get_rng_state(),
             "cuda": (
-                torch.cuda.get_rng_state_all()
-                if self.device.type == "cuda"
-                else None
+                torch.cuda.get_rng_state_all() if self.device.type == "cuda" else None
             ),
         }
         state = {
@@ -480,7 +474,9 @@ class VICRegTrainer:
             for j, tensor in enumerate([imgs[i], x1, x2]):
                 ax = axes[i, j]
                 # tensor may be (1, 256, 256) or (256, 256); squeeze channel dim
-                img_np = tensor.squeeze(0).numpy() if tensor.ndim == 3 else tensor.numpy()
+                img_np = (
+                    tensor.squeeze(0).numpy() if tensor.ndim == 3 else tensor.numpy()
+                )
                 ax.imshow(img_np, cmap="viridis", vmin=vmin, vmax=vmax)
                 ax.axis("off")
                 if i == 0:
@@ -490,7 +486,9 @@ class VICRegTrainer:
         plt.tight_layout()
         save_figure(fig, plot_dir / "augmentation_pairs.png")
         plt.close(fig)
-        logger.info("Saved augmentation pairs to %s", plot_dir / "augmentation_pairs.png")
+        logger.info(
+            "Saved augmentation pairs to %s", plot_dir / "augmentation_pairs.png"
+        )
 
     def _plot_final_curves(self) -> None:
         from src.evaluation.visualize import plot_loss_curves

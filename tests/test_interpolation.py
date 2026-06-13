@@ -29,7 +29,7 @@ class TestInterpolatePicks:
     def test_single_point_no_interp(self) -> None:
         """One point cannot define a curve, but the direct pick is stored."""
         picks, mask = interpolate_picks([(50, 100)])
-        assert picks[50] == 100   # direct pick preserved for round-trip
+        assert picks[50] == 100  # direct pick preserved for round-trip
         assert (picks[:50] == -1).all()
         assert (picks[51:] == -1).all()
         assert mask[50]
@@ -82,9 +82,7 @@ class TestInterpolatePicks:
         """Interpolated values are clipped to [0, 255]."""
         # Extreme valid points; the interpolation path must never escape
         # the model grid even if numerical rounding occurs.
-        picks, _mask = interpolate_picks(
-            [(0, 0), (128, 255), (255, 0)]
-        )
+        picks, _mask = interpolate_picks([(0, 0), (128, 255), (255, 0)])
         assert picks.min() >= 0
         assert picks.max() <= 255
 

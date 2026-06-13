@@ -62,7 +62,11 @@ def main(argv: list[str] | None = None) -> int:
     # MLPClassifier net: Linear(0) → ReLU(1) → Dropout(2) → Linear(3) → ReLU(4) → Dropout(5) → Linear(6)
     input_dim = int(state_dict["net.0.weight"].shape[1])
     h1 = int(state_dict["net.0.weight"].shape[0])
-    h2 = int(state_dict["net.3.weight"].shape[0]) if "net.3.weight" in state_dict else None
+    h2 = (
+        int(state_dict["net.3.weight"].shape[0])
+        if "net.3.weight" in state_dict
+        else None
+    )
     hidden_dims = [h1, h2] if h2 is not None else [h1]
     # Find final Linear layer (highest even index in state_dict)
     linear_keys = [k for k in state_dict if "weight" in k and k.startswith("net.")]
@@ -108,9 +112,13 @@ def main(argv: list[str] | None = None) -> int:
         spectrum_ids=spectrum_ids,
         labels=aligned_labels,
     )
-    print(f"Saved {len(embeddings)} embeddings of shape {embeddings.shape} to {output_path}")
+    print(
+        f"Saved {len(embeddings)} embeddings of shape {embeddings.shape} to {output_path}"
+    )
     print(f"  Spectrum IDs: {len(spectrum_ids)}")
-    print(f"  Labels: {len(aligned_labels)} (including {(aligned_labels == -1).sum()} noise)")
+    print(
+        f"  Labels: {len(aligned_labels)} (including {(aligned_labels == -1).sum()} noise)"
+    )
     return 0
 
 

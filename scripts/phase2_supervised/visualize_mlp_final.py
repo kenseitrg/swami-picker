@@ -78,7 +78,9 @@ def _plot_training_curves(records: list[dict], output_dir: Path) -> None:
 
     # Panel 4: Silhouette
     ax = axes[1, 1]
-    ax.plot(epochs, [r.get("val_silhouette", 0.0) for r in records], "-", color="C3", lw=1.2)
+    ax.plot(
+        epochs, [r.get("val_silhouette", 0.0) for r in records], "-", color="C3", lw=1.2
+    )
     ax.set_xlabel("Epoch")
     ax.set_ylabel("Silhouette Score")
     ax.set_title("Validation Penultimate Silhouette")
@@ -90,7 +92,12 @@ def _plot_training_curves(records: list[dict], output_dir: Path) -> None:
     print(f"Saved training curves to {output_dir / '01_training_curves.png'}")
 
 
-def _plot_umap(embeddings: np.ndarray, labels: np.ndarray, spectrum_ids: np.ndarray, output_dir: Path) -> None:
+def _plot_umap(
+    embeddings: np.ndarray,
+    labels: np.ndarray,
+    spectrum_ids: np.ndarray,
+    output_dir: Path,
+) -> None:
     """UMAP 2D projection colored by cluster label."""
     import matplotlib.pyplot as plt
     import umap
@@ -137,7 +144,9 @@ def _plot_umap(embeddings: np.ndarray, labels: np.ndarray, spectrum_ids: np.ndar
             zorder=2,
         )
 
-    ax.set_title(f"MLP Penultimate Embeddings (128-D → UMAP 2D)\nSilhouette = {sil:.4f}")
+    ax.set_title(
+        f"MLP Penultimate Embeddings (128-D → UMAP 2D)\nSilhouette = {sil:.4f}"
+    )
     ax.set_xlabel("UMAP 1")
     ax.set_ylabel("UMAP 2")
     ax.legend(
@@ -154,7 +163,13 @@ def _plot_umap(embeddings: np.ndarray, labels: np.ndarray, spectrum_ids: np.ndar
     print(f"Saved UMAP plot to {output_dir / '02_umap_embeddings.png'}")
 
 
-def _plot_cluster_examples(embeddings: np.ndarray, labels: np.ndarray, spectrum_ids: np.ndarray, manifest_path: Path, output_dir: Path) -> None:
+def _plot_cluster_examples(
+    embeddings: np.ndarray,
+    labels: np.ndarray,
+    spectrum_ids: np.ndarray,
+    manifest_path: Path,
+    output_dir: Path,
+) -> None:
     """Grid of representative spectra per cluster."""
     import matplotlib.pyplot as plt
     from matplotlib.gridspec import GridSpec
@@ -169,7 +184,9 @@ def _plot_cluster_examples(embeddings: np.ndarray, labels: np.ndarray, spectrum_
     examples_per_cluster = 3
 
     fig = plt.figure(figsize=(3.5 * examples_per_cluster, 2.2 * n_clusters))
-    gs = GridSpec(n_clusters, examples_per_cluster, figure=fig, wspace=0.15, hspace=0.25)
+    gs = GridSpec(
+        n_clusters, examples_per_cluster, figure=fig, wspace=0.15, hspace=0.25
+    )
 
     for row, lbl in enumerate(unique_labels):
         mask = labels == lbl
@@ -201,16 +218,22 @@ def _plot_cluster_examples(embeddings: np.ndarray, labels: np.ndarray, spectrum_
             if col == 0:
                 ax.set_ylabel(f"Cluster {int(lbl)}\n(n={mask.sum()})", fontsize=9)
             if row == 0:
-                ax.set_title(f"Ex {col+1}", fontsize=9)
+                ax.set_title(f"Ex {col + 1}", fontsize=9)
 
-    fig.suptitle("Representative FK Spectra per Cluster (closest to embedding centroid)", fontsize=12, y=1.0)
+    fig.suptitle(
+        "Representative FK Spectra per Cluster (closest to embedding centroid)",
+        fontsize=12,
+        y=1.0,
+    )
     plt.tight_layout()
     save_figure(fig, output_dir / "03_cluster_examples.png")
     plt.close(fig)
     print(f"Saved cluster examples to {output_dir / '03_cluster_examples.png'}")
 
 
-def _plot_similarity_and_silhouette(embeddings: np.ndarray, labels: np.ndarray, output_dir: Path) -> None:
+def _plot_similarity_and_silhouette(
+    embeddings: np.ndarray, labels: np.ndarray, output_dir: Path
+) -> None:
     """Cosine similarity matrix + per-cluster silhouette bar chart."""
     import matplotlib.pyplot as plt
     from matplotlib.gridspec import GridSpec
@@ -263,39 +286,70 @@ def _plot_similarity_and_silhouette(embeddings: np.ndarray, labels: np.ndarray, 
         for j in range(n_classes):
             val = sim_matrix[i, j]
             color = "white" if abs(val) > 0.65 else "black"
-            ax1.text(j, i, f"{val:.3f}", ha="center", va="center", color=color, fontsize=8)
+            ax1.text(
+                j, i, f"{val:.3f}", ha="center", va="center", color=color, fontsize=8
+            )
 
     plt.colorbar(im, ax=ax1, fraction=0.046, pad=0.04, label="Cosine Similarity")
 
     # Right: per-cluster silhouette
     ax2 = fig.add_subplot(gs[0, 1])
     y_pos = np.arange(n_classes)
-    bars = ax2.barh(y_pos, cluster_sil, color="steelblue", edgecolor="black", linewidth=0.5)
+    bars = ax2.barh(
+        y_pos, cluster_sil, color="steelblue", edgecolor="black", linewidth=0.5
+    )
     ax2.set_yticks(y_pos)
     ax2.set_yticklabels([f"Cluster {int(lbl)}" for lbl in unique_labels])
     ax2.set_xlabel("Silhouette Score")
     ax2.set_title(f"Per-Cluster Silhouette (overall = {overall_sil:.4f})")
-    ax2.axvline(x=overall_sil, color="red", linestyle="--", lw=1.5, label=f"Overall ({overall_sil:.3f})")
+    ax2.axvline(
+        x=overall_sil,
+        color="red",
+        linestyle="--",
+        lw=1.5,
+        label=f"Overall ({overall_sil:.3f})",
+    )
     ax2.legend()
     ax2.set_xlim(-0.1, 1.0)
     ax2.grid(axis="x", alpha=0.3)
 
     # Add value labels on bars
     for bar, val in zip(bars, cluster_sil):
-        ax2.text(val + 0.02, bar.get_y() + bar.get_height()/2, f"{val:.3f}", va="center", fontsize=8)
+        ax2.text(
+            val + 0.02,
+            bar.get_y() + bar.get_height() / 2,
+            f"{val:.3f}",
+            va="center",
+            fontsize=8,
+        )
 
     plt.tight_layout()
     save_figure(fig, output_dir / "04_similarity_silhouette.png")
     plt.close(fig)
-    print(f"Saved similarity + silhouette to {output_dir / '04_similarity_silhouette.png'}")
+    print(
+        f"Saved similarity + silhouette to {output_dir / '04_similarity_silhouette.png'}"
+    )
 
 
 def main(argv: list[str] | None = None) -> int:
-    parser = argparse.ArgumentParser(description="Visualise final MLP classifier results")
-    parser.add_argument("--metrics", type=str, required=True, help="Path to metrics.jsonl")
-    parser.add_argument("--embeddings", type=str, required=True, help="Path to embeddings .npz")
-    parser.add_argument("--manifest", type=str, default="data/processed/manifest.json", help="Dataset manifest")
-    parser.add_argument("--output-dir", type=str, required=True, help="Output directory for figures")
+    parser = argparse.ArgumentParser(
+        description="Visualise final MLP classifier results"
+    )
+    parser.add_argument(
+        "--metrics", type=str, required=True, help="Path to metrics.jsonl"
+    )
+    parser.add_argument(
+        "--embeddings", type=str, required=True, help="Path to embeddings .npz"
+    )
+    parser.add_argument(
+        "--manifest",
+        type=str,
+        default="data/processed/manifest.json",
+        help="Dataset manifest",
+    )
+    parser.add_argument(
+        "--output-dir", type=str, required=True, help="Output directory for figures"
+    )
     args = parser.parse_args(argv)
 
     output_dir = Path(args.output_dir)
@@ -310,12 +364,16 @@ def main(argv: list[str] | None = None) -> int:
     emb_data.close()
 
     n_clusters = len(np.unique(labels[labels != -1]))
-    print(f"Loaded {len(records)} epochs, {len(embeddings)} embeddings, {n_clusters} clusters")
+    print(
+        f"Loaded {len(records)} epochs, {len(embeddings)} embeddings, {n_clusters} clusters"
+    )
 
     # Generate figures
     _plot_training_curves(records, output_dir)
     _plot_umap(embeddings, labels, spectrum_ids, output_dir)
-    _plot_cluster_examples(embeddings, labels, spectrum_ids, Path(args.manifest), output_dir)
+    _plot_cluster_examples(
+        embeddings, labels, spectrum_ids, Path(args.manifest), output_dir
+    )
     _plot_similarity_and_silhouette(embeddings, labels, output_dir)
 
     print(f"\nAll figures saved to {output_dir}")

@@ -85,31 +85,23 @@ class PickingModel(nn.Module):
         self.pool2 = nn.MaxPool2d(2)
 
         # Bottleneck
-        self.bottleneck = ConvBlock(
-            base_channels * 2, embed_dim, dropout=dropout
-        )
+        self.bottleneck = ConvBlock(base_channels * 2, embed_dim, dropout=dropout)
 
         # Decoder
         self.up2 = nn.ConvTranspose2d(
             embed_dim, base_channels * 2, kernel_size=2, stride=2
         )
-        self.dec2 = ConvBlock(
-            base_channels * 4, base_channels * 2, dropout=dropout
-        )
+        self.dec2 = ConvBlock(base_channels * 4, base_channels * 2, dropout=dropout)
         self.up1 = nn.ConvTranspose2d(
             base_channels * 2, base_channels, kernel_size=2, stride=2
         )
-        self.dec1 = ConvBlock(
-            base_channels * 2, base_channels, dropout=dropout
-        )
+        self.dec1 = ConvBlock(base_channels * 2, base_channels, dropout=dropout)
 
         # Final classification head.
         # The decoder output is (B, base_channels, H, W).  We want to
         # produce (B, num_classes, W).  Each frequency column is treated
         # as a feature vector of length base_channels * H.
-        self.feature_conv = nn.Conv2d(
-            base_channels, base_channels, kernel_size=1
-        )
+        self.feature_conv = nn.Conv2d(base_channels, base_channels, kernel_size=1)
         self.classifier = nn.Conv1d(
             base_channels * spectrum_height,
             self.num_classes,

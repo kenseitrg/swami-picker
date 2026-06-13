@@ -27,7 +27,7 @@ def sample_tensors():
 
 
 def test_freq_shift_sync(sample_tensors):
-    """Horizontal roll moves picks by the same amount."""
+    """Horizontal roll moves picks by the same amount and zero-fills image."""
     spectrum, pick_target, presence_target, direct_mask, confidence = sample_tensors
     transform = FreqShift(max_shift=0.05)
     aug = transform(spectrum, pick_target, presence_target, direct_mask, confidence)
@@ -40,6 +40,19 @@ def test_freq_shift_sync(sample_tensors):
     assert first_valid > 0 or (p >= 0).sum() == (pick_target >= 0).sum()
     assert torch.all(pr[(p == -1)] == 0)
     assert torch.all(d[(p == -1)] == False)  # noqa: E712
+
+    # Spectrum must be zero in the rolled-in strip only.  We know the
+    # roll size from the shift that ``FreqShift`` applied, but it is not
+    # exposed; instead compare the zeroed columns to the newly-unpicked
+    # columns that were not unpicked originally.
+    original_unpicked = pick_target == -1
+    rolled_in = p == -1
+    newly_unpicked = rolled_in & ~original_unpicked
+    zero_cols = torch.all(s == 0, dim=(0, 1))
+    if newly_unpicked.any():
+        assert torch.equal(newly_unpicked, zero_cols), (
+            "Rolled-in frequency columns must be zero and only those"
+        )
 
 
 def test_waven_shift_clip(sample_tensors):

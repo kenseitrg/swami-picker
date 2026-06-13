@@ -17,8 +17,8 @@ def picking_collate(batch: list) -> tuple:
     Returns:
         Tuple of batched tensors and a list of spectrum IDs.
     """
-    spectra, pick_targets, direct_masks, confidences, cluster_labels, spectrum_ids = zip(
-        *batch
+    spectra, pick_targets, direct_masks, confidences, cluster_labels, spectrum_ids = (
+        zip(*batch)
     )
     return (
         torch.stack(spectra, dim=0),

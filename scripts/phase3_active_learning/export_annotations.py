@@ -106,9 +106,9 @@ def _collect_annotations(
         # (e.g. "annotations/2026-06-10_test01/spectra").  Try three
         # resolution strategies and pick the first one that exists.
         candidates = [
-            annotations_dir,                       # as-is (absolute or CWD-relative)
+            annotations_dir,  # as-is (absolute or CWD-relative)
             session_dir.parent / annotations_dir,  # relative to project root
-            session_dir / "spectra",               # fallback default
+            session_dir / "spectra",  # fallback default
         ]
         annotations_dir = next(
             (p for p in candidates if p.exists()),
@@ -132,7 +132,9 @@ def _collect_annotations(
             if n_direct < min_direct_picks:
                 logger.debug(
                     "Skipping %s: only %d direct picks (< %d)",
-                    sid, n_direct, min_direct_picks,
+                    sid,
+                    n_direct,
+                    min_direct_picks,
                 )
                 continue
 
@@ -141,13 +143,15 @@ def _collect_annotations(
                 logger.debug("Skipping %s: noise point.", sid)
                 continue
 
-            records.append({
-                "spectrum_id": sid,
-                "wavenumber_picks": annotation.wavenumber_picks,
-                "direct_mask": annotation.direct_mask,
-                "confidence": annotation.confidence,
-                "cluster_label": cluster_label,
-            })
+            records.append(
+                {
+                    "spectrum_id": sid,
+                    "wavenumber_picks": annotation.wavenumber_picks,
+                    "direct_mask": annotation.direct_mask,
+                    "confidence": annotation.confidence,
+                    "cluster_label": cluster_label,
+                }
+            )
 
     return records
 

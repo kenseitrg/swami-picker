@@ -213,9 +213,7 @@ class AnnotationApp(tk.Tk):
                 ]
                 self.dirty = False
             except Exception as exc:
-                logger.warning(
-                    "Failed to load annotation for %s: %s", spectrum_id, exc
-                )
+                logger.warning("Failed to load annotation for %s: %s", spectrum_id, exc)
                 self.picks = []
                 self.dirty = False
         else:
@@ -308,17 +306,11 @@ class AnnotationApp(tk.Tk):
         cluster = self.cluster_map.get(spectrum_id, -1)
         progress = f"{self.current_idx + 1} / {len(self.queue)}"
 
-        self.session_label.config(
-            text=f"{spectrum_id}  |  Cluster {cluster}"
-        )
+        self.session_label.config(text=f"{spectrum_id}  |  Cluster {cluster}")
         self.progress_label.config(text=progress)
         dirty_flag = "  ● unsaved" if self.dirty else ""
-        self.status_label.config(
-            text=f"Direct picks: {len(self.picks)}{dirty_flag}"
-        )
-        self.title(
-            f"swami-picker — {spectrum_id} (C{cluster}) [{progress}]"
-        )
+        self.status_label.config(text=f"Direct picks: {len(self.picks)}{dirty_flag}")
+        self.title(f"swami-picker — {spectrum_id} (C{cluster}) [{progress}]")
 
     def _update_hover_status(
         self,
@@ -357,18 +349,14 @@ class AnnotationApp(tk.Tk):
             return
 
         freq_idx = self._physical_to_index(xdata, freq_axis[0], freq_axis[-1])
-        waven_idx = self._physical_to_index(
-            ydata, waven_axis[0], waven_axis[-1]
-        )
+        waven_idx = self._physical_to_index(ydata, waven_axis[0], waven_axis[-1])
 
         if event.button == 1:  # Left click — add
             self.picks = add_pick(self.picks, freq_idx, waven_idx)
             self.dirty = True
             logger.debug("Added pick at (%d, %d)", freq_idx, waven_idx)
         elif event.button in (2, 3):  # Middle / right click — remove nearest
-            self.picks = delete_picks_at_location(
-                self.picks, freq_idx, tol=2
-            )
+            self.picks = delete_picks_at_location(self.picks, freq_idx, tol=2)
             self.dirty = True
             logger.debug("Removed pick near freq %d", freq_idx)
 
@@ -394,9 +382,7 @@ class AnnotationApp(tk.Tk):
             return
 
         freq_idx = self._physical_to_index(xdata, freq_axis[0], freq_axis[-1])
-        waven_idx = self._physical_to_index(
-            ydata, waven_axis[0], waven_axis[-1]
-        )
+        waven_idx = self._physical_to_index(ydata, waven_axis[0], waven_axis[-1])
         self._hover_freq_idx = freq_idx
         self._update_hover_status(
             freq_idx,
@@ -406,9 +392,7 @@ class AnnotationApp(tk.Tk):
         )
 
     @staticmethod
-    def _physical_to_index(
-        value: float, vmin: float, vmax: float
-    ) -> int:
+    def _physical_to_index(value: float, vmin: float, vmax: float) -> int:
         """Map a physical coordinate to a pixel index in ``[0, 255]``."""
         if vmax == vmin:
             return 0
@@ -436,9 +420,7 @@ class AnnotationApp(tk.Tk):
         """Jump to the nearest spectrum belonging to a different cluster."""
         if not self.queue:
             return
-        current_cluster = self.cluster_map.get(
-            self.queue[self.current_idx], -1
-        )
+        current_cluster = self.cluster_map.get(self.queue[self.current_idx], -1)
         idx = self.current_idx + direction
         while 0 <= idx < len(self.queue):
             if self.cluster_map.get(self.queue[idx], -1) != current_cluster:
@@ -531,9 +513,7 @@ class AnnotationApp(tk.Tk):
             wavenumber_picks=wavenumber_picks,
             direct_mask=direct_mask,
             confidence=confidence,
-            timestamp=datetime.now(timezone.utc)
-            .isoformat()
-            .replace("+00:00", "Z"),
+            timestamp=datetime.now(timezone.utc).isoformat().replace("+00:00", "Z"),
             version=version,
         )
         save_annotation(record, annotation_path)

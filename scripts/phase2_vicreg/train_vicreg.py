@@ -95,9 +95,7 @@ def main() -> None:
     # ------------------------------------------------------------------
     # Experiment directory
     # ------------------------------------------------------------------
-    run_name = args.name or (
-        datetime.now().strftime("%Y-%m-%d") + "_phase2-vicreg"
-    )
+    run_name = args.name or (datetime.now().strftime("%Y-%m-%d") + "_phase2-vicreg")
     run_dir = Path("experiments") / run_name
     checkpoint_dir = run_dir / "checkpoints"
 

@@ -246,9 +246,7 @@ def main(argv: list[str] | None = None) -> int:
             dry_limit = min(dry_run_subset, len(feat_matrix))
             feat_matrix = feat_matrix[:dry_limit]
             label_array = label_array[:dry_limit]
-            logger.info(
-                "Dry-run mode: subset to %d samples", dry_limit
-            )
+            logger.info("Dry-run mode: subset to %d samples", dry_limit)
 
         # Train/val split (10% stratified hold-out)
         from sklearn.model_selection import train_test_split
@@ -296,9 +294,7 @@ def main(argv: list[str] | None = None) -> int:
             dry_limit = min(dry_run_subset, len(all_ids))
             all_ids = all_ids[:dry_limit]
             labels_dict = {sid: labels_dict[sid] for sid in all_ids}
-            logger.info(
-                "Dry-run mode: subset to %d samples", dry_limit
-            )
+            logger.info("Dry-run mode: subset to %d samples", dry_limit)
         from collections import Counter
         from sklearn.model_selection import train_test_split
 
@@ -339,13 +335,15 @@ def main(argv: list[str] | None = None) -> int:
             "CNN classifier: num_classes=%d, embed_dim=%d, augment=%s",
             num_classes,
             config.cnn_embed_dim,
-            any([
-                config.augment_noise_std > 0,
-                config.augment_intensity_jitter > 0,
-                config.augment_freq_shift_max > 0,
-                config.augment_waven_shift_max > 0,
-                config.augment_freq_dropout_prob > 0,
-            ]),
+            any(
+                [
+                    config.augment_noise_std > 0,
+                    config.augment_intensity_jitter > 0,
+                    config.augment_freq_shift_max > 0,
+                    config.augment_waven_shift_max > 0,
+                    config.augment_freq_dropout_prob > 0,
+                ]
+            ),
         )
 
     train_loader = DataLoader(

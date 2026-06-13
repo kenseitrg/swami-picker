@@ -240,9 +240,7 @@ def plot_probability_heatmap_overlay(
 
         # Left panel: grayscale spectrum.
         ax_spec = axes[row, 0]
-        ax_spec.imshow(
-            spec, aspect="auto", cmap="gray", extent=extent, origin="upper"
-        )
+        ax_spec.imshow(spec, aspect="auto", cmap="gray", extent=extent, origin="upper")
         ax_spec.set_xlabel("Frequency (Hz)" if meta else "Frequency index")
         ax_spec.set_ylabel("Wavenumber (1/m)" if meta else "Wavenumber index")
         title = meta.get("spectrum_id", f"Sample {idx}") if meta else f"Sample {idx}"
@@ -250,9 +248,7 @@ def plot_probability_heatmap_overlay(
 
         # Right panel: probability heatmap overlay.
         ax_heat = axes[row, 1]
-        ax_heat.imshow(
-            spec, aspect="auto", cmap="gray", extent=extent, origin="upper"
-        )
+        ax_heat.imshow(spec, aspect="auto", cmap="gray", extent=extent, origin="upper")
         # Normalize per column so the peak is always visible.
         peak = pick_probs.max(axis=0, keepdims=True)
         prob_map_norm = pick_probs / (peak + 1e-8)

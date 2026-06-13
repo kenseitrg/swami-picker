@@ -191,7 +191,11 @@ class FKPickingDataset(Dataset):
 
         if self.transform is not None:
             spectrum, pick_target, _, direct_mask, confidence = self.transform(
-                spectrum, pick_target, torch.zeros_like(pick_target), direct_mask, confidence
+                spectrum,
+                pick_target,
+                torch.zeros_like(pick_target),
+                direct_mask,
+                confidence,
             )
 
         return (
