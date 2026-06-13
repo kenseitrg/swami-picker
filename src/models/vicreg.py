@@ -6,7 +6,6 @@ Regularization for Self-Supervised Learning", ICLR 2022.
 
 from __future__ import annotations
 
-import math
 from typing import TYPE_CHECKING
 
 import torch

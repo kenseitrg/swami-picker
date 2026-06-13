@@ -1,11 +1,9 @@
 from __future__ import annotations
 
 import logging
-import math
 from typing import TYPE_CHECKING
 
 import torch
-import torch.nn.functional as F
 
 if TYPE_CHECKING:
     from torch import Tensor

@@ -17,7 +17,6 @@ from torch.utils.data import DataLoader
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 
-from src.data.augmentations import FKSpectrumTransform
 from src.data.fk_dataset import FKDataset
 from src.data.split import create_train_val_entries
 from src.models.vicreg import VICReg

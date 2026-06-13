@@ -22,7 +22,6 @@ import sys
 from pathlib import Path
 
 import numpy as np
-import torch
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 
@@ -195,7 +194,7 @@ def _plot_cluster_examples(embeddings: np.ndarray, labels: np.ndarray, spectrum_
                 tensor = tensor[0]
 
             ax = fig.add_subplot(gs[row, col])
-            im = ax.imshow(tensor, cmap="viridis", aspect="auto", origin="lower")
+            ax.imshow(tensor, cmap="viridis", aspect="auto", origin="lower")
             ax.set_xticks([])
             ax.set_yticks([])
 
@@ -254,8 +253,8 @@ def _plot_similarity_and_silhouette(embeddings: np.ndarray, labels: np.ndarray, 
     im = ax1.imshow(sim_matrix, cmap="RdYlGn", vmin=-1, vmax=1, aspect="auto")
     ax1.set_xticks(np.arange(n_classes))
     ax1.set_yticks(np.arange(n_classes))
-    ax1.set_xticklabels([str(int(l)) for l in unique_labels])
-    ax1.set_yticklabels([str(int(l)) for l in unique_labels])
+    ax1.set_xticklabels([str(int(lbl)) for lbl in unique_labels])
+    ax1.set_yticklabels([str(int(lbl)) for lbl in unique_labels])
     ax1.set_xlabel("Cluster")
     ax1.set_ylabel("Cluster")
     ax1.set_title("Mean Cosine Similarity Between Clusters")
@@ -273,7 +272,7 @@ def _plot_similarity_and_silhouette(embeddings: np.ndarray, labels: np.ndarray, 
     y_pos = np.arange(n_classes)
     bars = ax2.barh(y_pos, cluster_sil, color="steelblue", edgecolor="black", linewidth=0.5)
     ax2.set_yticks(y_pos)
-    ax2.set_yticklabels([f"Cluster {int(l)}" for l in unique_labels])
+    ax2.set_yticklabels([f"Cluster {int(lbl)}" for lbl in unique_labels])
     ax2.set_xlabel("Silhouette Score")
     ax2.set_title(f"Per-Cluster Silhouette (overall = {overall_sil:.4f})")
     ax2.axvline(x=overall_sil, color="red", linestyle="--", lw=1.5, label=f"Overall ({overall_sil:.3f})")
@@ -310,7 +309,8 @@ def main(argv: list[str] | None = None) -> int:
     spectrum_ids = np.array(emb_data["spectrum_ids"])
     emb_data.close()
 
-    print(f"Loaded {len(records)} epochs, {len(embeddings)} embeddings, {len(unique_labels := np.unique(labels[labels != -1]))} clusters")
+    n_clusters = len(np.unique(labels[labels != -1]))
+    print(f"Loaded {len(records)} epochs, {len(embeddings)} embeddings, {n_clusters} clusters")
 
     # Generate figures
     _plot_training_curves(records, output_dir)
