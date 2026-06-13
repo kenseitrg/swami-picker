@@ -13,13 +13,16 @@ class PickingLoss(nn.Module):
     Each frequency column is classified into one of
     ``num_classes = spectrum_height + 1`` classes.  The last class is
     "no pick".  Direct (human-clicked) picks are weighted higher than
-    interpolated picks.
+    interpolated picks.  An optional smoothness term penalizes large
+    changes in the predicted distribution between adjacent frequency
+    columns, encouraging continuous dispersion curves.
     """
 
     def __init__(
         self,
         pick_weight: float = 1.0,
         direct_pick_weight: float = 2.0,
+        smooth_weight: float = 0.0,
         absent_class: int | None = None,
     ) -> None:
         """Initialize the loss.
@@ -28,12 +31,15 @@ class PickingLoss(nn.Module):
             pick_weight: Global multiplier for the pick loss.
             direct_pick_weight: Multiplicative weight for direct picks
                 relative to interpolated picks.
+            smooth_weight: Weight for the frequency-axis smoothness term.
+                Set to ``0.0`` to disable.
             absent_class: Index of the "no pick" class.  Defaults to the
                 last class.
         """
         super().__init__()
         self.pick_weight = pick_weight
         self.direct_pick_weight = direct_pick_weight
+        self.smooth_weight = smooth_weight
         self.absent_class = absent_class
 
     def forward(
@@ -76,4 +82,26 @@ class PickingLoss(nn.Module):
         pick_loss = ce.sum() / normalizer
 
         total_loss = self.pick_weight * pick_loss
-        return total_loss, {"pick_loss": pick_loss.detach()}
+
+        loss_dict: dict[str, torch.Tensor] = {"pick_loss": pick_loss.detach()}
+
+        if self.smooth_weight > 0.0:
+            smooth_loss = self._smoothness_loss(logits)
+            total_loss = total_loss + self.smooth_weight * smooth_loss
+            loss_dict["smooth_loss"] = smooth_loss.detach()
+
+        return total_loss, loss_dict
+
+    def _smoothness_loss(self, logits: torch.Tensor) -> torch.Tensor:
+        """Penalize large softmax-distribution changes along frequency.
+
+        Args:
+            logits: Tensor of shape ``(B, num_classes, W)``.
+
+        Returns:
+            Scalar smoothness loss.
+        """
+        probs = F.softmax(logits, dim=1)  # (B, C, W)
+        diff = probs[:, :, 1:] - probs[:, :, :-1]  # (B, C, W-1)
+        # Total-variation-like penalty on the class distributions.
+        return torch.mean(torch.abs(diff))

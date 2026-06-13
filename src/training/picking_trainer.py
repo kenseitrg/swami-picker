@@ -80,6 +80,7 @@ class PickingTrainer:
         self.criterion = PickingLoss(
             pick_weight=config.loss_pick_weight,
             direct_pick_weight=config.direct_pick_weight,
+            smooth_weight=getattr(config, "loss_smooth_weight", 0.0),
         )
 
         self.optimizer = self._setup_optimizer()
@@ -92,6 +93,7 @@ class PickingTrainer:
         self.epochs_without_improvement = 0
         self.val_metric_history: deque[float] = deque(maxlen=config.smooth_window)
         self.best_checkpoint_path: Path | None = None
+        self._epoch_smooth_loss = 0.0
 
         self.metrics_logger = MetricsLogger(run_dir / "metrics.jsonl")
         self.plots_dir = run_dir / "plots"
@@ -257,7 +259,7 @@ class PickingTrainer:
 
             with self._autocast_context():
                 logits = self.model(spectra)
-                loss, _ = self.criterion(logits, pick_target, direct_mask)
+                loss, loss_dict = self.criterion(logits, pick_target, direct_mask)
                 loss = loss / self.config.accum_steps
 
             if self.scaler is not None:
@@ -289,6 +291,10 @@ class PickingTrainer:
                 self.global_step += 1
 
             total_loss += loss.item() * self.config.accum_steps
+            if "smooth_loss" in loss_dict:
+                total_smooth_loss = getattr(self, "_epoch_smooth_loss", 0.0)
+                total_smooth_loss += loss_dict["smooth_loss"].item()
+                self._epoch_smooth_loss = total_smooth_loss
             num_batches += 1
 
             with torch.no_grad():
@@ -304,7 +310,7 @@ class PickingTrainer:
         epoch_time = time.perf_counter() - epoch_start
         throughput = dataset_size / epoch_time if epoch_time > 0 else 0.0
 
-        return {
+        metrics: dict[str, Any] = {
             "train_loss": total_loss / num_batches,
             "train_rmse_pixels": total_rmse / num_batches,
             "train_presence_f1": total_f1 / num_batches,
@@ -312,6 +318,11 @@ class PickingTrainer:
             "epoch_time_sec": epoch_time,
             "throughput_samples_per_sec": throughput,
         }
+        smooth_total = getattr(self, "_epoch_smooth_loss", None)
+        if smooth_total is not None:
+            metrics["train_smooth_loss"] = smooth_total / num_batches
+            self._epoch_smooth_loss = 0.0
+        return metrics
 
     @torch.no_grad()
     def _validate(self, epoch: int) -> dict[str, Any]:

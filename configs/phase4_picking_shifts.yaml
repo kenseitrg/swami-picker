@@ -1,5 +1,6 @@
 # Phase 4: Supervised dispersion-curve picking with pick-synchronized shifts.
-# Single 257-class head.  5-fold cross-validation, fold 0 as validation.
+# Shifts are currently disabled (see analysis in TODO).  Single 257-class
+# head.  5-fold cross-validation, fold 0 as validation.
 
 # Data
 training_data_path: "data/processed/phase4_training_data.npz"
@@ -19,8 +20,8 @@ dropout: 0.3
 aug_enabled: true
 aug_noise_std: 0.05
 aug_intensity_jitter: 0.15
-aug_freq_shift_max: 0.05
-aug_waven_shift_max: 0.03
+aug_freq_shift_max: 0.0
+aug_waven_shift_max: 0.0
 
 # Training
 batch_size: 16

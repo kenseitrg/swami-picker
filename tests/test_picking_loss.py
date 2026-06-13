@@ -86,3 +86,32 @@ def test_loss_components_finite():
 
     assert torch.isfinite(total_loss)
     assert torch.isfinite(loss_dict["pick_loss"])
+
+
+def test_smoothness_loss_zero_when_uniform():
+    """Smoothness loss is zero when every column has the same distribution."""
+    loss_fn = PickingLoss(smooth_weight=1.0)
+    logits = torch.randn(2, 257, 1).expand(2, 257, 256)
+    pick_target, direct_mask = _make_targets()
+
+    total_loss, loss_dict = loss_fn(logits, pick_target, direct_mask)
+
+    assert torch.isfinite(total_loss)
+    assert "smooth_loss" in loss_dict
+    assert torch.isclose(loss_dict["smooth_loss"], torch.tensor(0.0), atol=1e-5)
+
+
+def test_smoothness_loss_present_with_jumps():
+    """Smoothness loss is positive when adjacent columns differ sharply."""
+    loss_fn = PickingLoss(smooth_weight=1.0)
+    logits = torch.zeros(1, 257, 256)
+    # Alternating one-hot columns.
+    logits[:, 0, ::2] = 10.0
+    logits[:, 1, 1::2] = 10.0
+    pick_target = torch.full((1, 256), -1.0)
+    direct_mask = torch.zeros_like(pick_target, dtype=torch.bool)
+
+    total_loss, loss_dict = loss_fn(logits, pick_target, direct_mask)
+
+    assert "smooth_loss" in loss_dict
+    assert loss_dict["smooth_loss"].item() > 1e-3

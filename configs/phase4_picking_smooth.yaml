@@ -1,6 +1,5 @@
-# Phase 4: Supervised dispersion-curve picking.
-# Single 257-class head (256 wavenumber bins + 1 absent class).
-# 5-fold cross-validation, fold 0 as validation.
+# Phase 4: Supervised dispersion-curve picking with frequency-axis smoothness loss.
+# Single 257-class head.  5-fold cross-validation, fold 0 as validation.
 
 # Data
 training_data_path: "data/processed/phase4_training_data.npz"
@@ -16,7 +15,7 @@ embed_dim: 64
 spectrum_height: 256
 dropout: 0.3
 
-# Augmentation (pick-synchronized)
+# Augmentation (pick-synchronized; shifts disabled)
 aug_enabled: true
 aug_noise_std: 0.05
 aug_intensity_jitter: 0.15
