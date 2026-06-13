@@ -1,0 +1,40 @@
+# Phase 4: U-Net v2 — noise + intensity + pick-synchronized frequency/wavenumber shifts.
+# Effective batch size = 8 * 2 = 16.
+
+training_data_path: "data/processed/phase4_training_data.npz"
+val_fraction: 0.10
+val_seed: 42
+min_direct_picks: 3
+use_cluster_conditioning: false
+cluster_embedding_path: null
+cluster_embed_dim: 128
+
+backbone: "unet"
+base_channels: 32
+embed_dim: 128
+spectrum_height: 256
+
+aug_enabled: true
+aug_noise_std: 0.05
+aug_intensity_jitter: 0.15
+aug_freq_shift_max: 0.05
+aug_waven_shift_max: 0.03
+
+batch_size: 8
+accum_steps: 2
+epochs: 100
+lr: 1.0e-3
+weight_decay: 0.05
+betas: [0.9, 0.95]
+warmup_ratio: 0.1
+grad_clip_norm: 1.0
+loss_pick_weight: 1.0
+loss_bce_weight: 0.5
+direct_pick_weight: 2.0
+seed: 42
+
+num_workers: 4
+pin_memory: true
+log_interval: 10
+
+visualization_epochs: [10, 25, 50, 75, 100]
