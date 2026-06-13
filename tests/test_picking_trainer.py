@@ -9,7 +9,7 @@ import pytest
 import torch
 from torch.utils.data import DataLoader, TensorDataset
 
-from src.models.picking_model import SimpleUNetPickingModel
+from src.models.picking_model import PickingModel
 from src.training.picking_trainer import PickingTrainer
 from src.utils.config import PickingConfig
 
@@ -21,15 +21,12 @@ def tiny_picking_loaders():
     spectra = torch.randn(n, 1, 256, 256)
     picks = torch.full((n, 256), -1.0)
     picks[:, 50:200] = 100.0
-    presence = (picks >= 0).float()
-    direct = presence.bool()
-    confidence = torch.ones_like(presence)
-
-    # Dummy cluster embeddings (not used since conditioning is off).
-    cluster = torch.randn(n, 128)
+    direct = (picks >= 0).bool()
+    confidence = torch.ones_like(picks)
+    cluster_labels = torch.zeros(n, dtype=torch.long)
 
     dataset = TensorDataset(
-        spectra, picks, presence, direct, confidence, cluster, torch.arange(n)
+        spectra, picks, direct, confidence, cluster_labels, torch.arange(n)
     )
     train_ds, val_ds = torch.utils.data.random_split(
         dataset, [8, 4], generator=torch.Generator().manual_seed(0)
@@ -44,9 +41,9 @@ def test_trainer_smoke(tiny_picking_loaders, tmp_path: Path) -> None:
     train_loader, val_loader = tiny_picking_loaders
 
     config = PickingConfig(
-        backbone="unet",
         base_channels=8,
         embed_dim=16,
+        spectrum_height=256,
         epochs=2,
         batch_size=4,
         accum_steps=1,
@@ -56,10 +53,11 @@ def test_trainer_smoke(tiny_picking_loaders, tmp_path: Path) -> None:
         aug_enabled=False,
     )
 
-    model = SimpleUNetPickingModel(
+    model = PickingModel(
         in_channels=1,
         base_channels=config.base_channels,
         embed_dim=config.embed_dim,
+        spectrum_height=config.spectrum_height,
     )
 
     device = torch.device("cpu")
@@ -94,9 +92,9 @@ def test_trainer_resume(tiny_picking_loaders, tmp_path: Path) -> None:
     train_loader, val_loader = tiny_picking_loaders
 
     config = PickingConfig(
-        backbone="unet",
         base_channels=8,
         embed_dim=16,
+        spectrum_height=256,
         epochs=1,
         batch_size=4,
         accum_steps=1,
@@ -106,10 +104,11 @@ def test_trainer_resume(tiny_picking_loaders, tmp_path: Path) -> None:
         aug_enabled=False,
     )
 
-    model = SimpleUNetPickingModel(
+    model = PickingModel(
         in_channels=1,
         base_channels=config.base_channels,
         embed_dim=config.embed_dim,
+        spectrum_height=config.spectrum_height,
     )
 
     device = torch.device("cpu")
@@ -128,9 +127,9 @@ def test_trainer_resume(tiny_picking_loaders, tmp_path: Path) -> None:
     trainer.train()
 
     config2 = PickingConfig(
-        backbone="unet",
         base_channels=8,
         embed_dim=16,
+        spectrum_height=256,
         epochs=2,
         batch_size=4,
         accum_steps=1,
@@ -139,10 +138,11 @@ def test_trainer_resume(tiny_picking_loaders, tmp_path: Path) -> None:
         visualization_epochs=[],
         aug_enabled=False,
     )
-    model2 = SimpleUNetPickingModel(
+    model2 = PickingModel(
         in_channels=1,
         base_channels=config2.base_channels,
         embed_dim=config2.embed_dim,
+        spectrum_height=config2.spectrum_height,
     )
     trainer2 = PickingTrainer(
         model=model2,
@@ -157,5 +157,4 @@ def test_trainer_resume(tiny_picking_loaders, tmp_path: Path) -> None:
     trainer2.train()
 
     lines = (run_dir / "metrics.jsonl").read_text().strip().split("\n")
-    # One line from first run, one from resumed run starting at epoch 2.
     assert len(lines) == 2

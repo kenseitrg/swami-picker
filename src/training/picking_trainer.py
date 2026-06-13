@@ -6,11 +6,14 @@ import json
 import logging
 import math
 import time
+from collections import deque
 from collections.abc import Sized
 from contextlib import nullcontext
+from typing import cast
 from pathlib import Path
-from typing import Any, cast
+from typing import Any
 
+import numpy as np
 import torch
 import torch.nn as nn
 from torch.amp import GradScaler
@@ -39,20 +42,12 @@ class MetricsLogger:
     """Append-only JSONL metrics logger."""
 
     def __init__(self, path: Path) -> None:
-        """Initialize the logger.
-
-        Args:
-            path: Path to the JSONL file.
-        """
+        """Initialize the logger."""
         self.path = path
         path.parent.mkdir(parents=True, exist_ok=True)
 
     def log(self, metrics: dict[str, Any]) -> None:
-        """Append a metrics dictionary as a single JSON line.
-
-        Args:
-            metrics: Dictionary of scalar metrics.
-        """
+        """Append a metrics dictionary as a single JSON line."""
         with open(self.path, "a") as fh:
             fh.write(json.dumps(metrics) + "\n")
 
@@ -72,19 +67,7 @@ class PickingTrainer:
         resume_from: Path | None = None,
         argv: list[str] | None = None,
     ) -> None:
-        """Initialize the trainer.
-
-        Args:
-            model: Picking model (U-Net or encoder-decoder).
-            config: ``PickingConfig`` instance.
-            device: Torch device.
-            train_loader: Training data loader.
-            val_loader: Validation data loader.
-            checkpoint_dir: Directory to write checkpoints.
-            run_dir: Root directory for the current run.
-            resume_from: Optional checkpoint path to resume from.
-            argv: Command-line arguments for reproducibility logging.
-        """
+        """Initialize the trainer."""
         self.model = model.to(device)
         self.config = config
         self.device = device
@@ -96,7 +79,6 @@ class PickingTrainer:
 
         self.criterion = PickingLoss(
             pick_weight=config.loss_pick_weight,
-            bce_weight=config.loss_bce_weight,
             direct_pick_weight=config.direct_pick_weight,
         )
 
@@ -106,8 +88,10 @@ class PickingTrainer:
 
         self.global_step = 0
         self.start_epoch = 0
-        self.best_val_rmse = float("inf")
+        self.best_val_metric = float("inf")
         self.epochs_without_improvement = 0
+        self.val_metric_history: deque[float] = deque(maxlen=config.smooth_window)
+        self.best_checkpoint_path: Path | None = None
 
         self.metrics_logger = MetricsLogger(run_dir / "metrics.jsonl")
         self.plots_dir = run_dir / "plots"
@@ -117,13 +101,7 @@ class PickingTrainer:
             self._load_checkpoint(resume_from)
 
     def _setup_optimizer(self) -> torch.optim.Optimizer:
-        """Build the AdamW optimizer with optional backbone LR.
-
-        Returns:
-            Configured ``AdamW`` instance.
-        """
-        # The model is trained end-to-end from scratch, so all parameters
-        # share the same learning rate.
+        """Build the AdamW optimizer."""
         return torch.optim.AdamW(
             self.model.parameters(),
             lr=self.config.lr,
@@ -133,11 +111,7 @@ class PickingTrainer:
         )
 
     def _setup_scheduler(self) -> torch.optim.lr_scheduler.LambdaLR:
-        """Build the LR scheduler with warmup and cosine decay.
-
-        Returns:
-            ``LambdaLR`` instance.
-        """
+        """Build the LR scheduler with warmup and cosine decay."""
         steps_per_epoch = math.ceil(len(self.train_loader) / self.config.accum_steps)
         total_steps = steps_per_epoch * self.config.epochs
         warmup_steps = int(total_steps * self.config.warmup_ratio)
@@ -192,14 +166,22 @@ class PickingTrainer:
             }
             self.metrics_logger.log(metrics)
 
+            # Smoothed metric for checkpoint selection.
             val_rmse = val_metrics["val_rmse_pixels"]
-            # A val RMSE of 0 usually means no valid predictions were made
-            # (empty intersection of predicted and true picks), so treat it
-            # as invalid for checkpoint selection.
-            val_rmse_finite = math.isfinite(val_rmse) and val_rmse > 0.0
-            is_best = val_rmse_finite and val_rmse < self.best_val_rmse
+            if math.isfinite(val_rmse) and val_rmse > 0.0:
+                self.val_metric_history.append(val_rmse)
+            smoothed_metric = (
+                np.mean(list(self.val_metric_history))
+                if len(self.val_metric_history) == self.val_metric_history.maxlen
+                else float("inf")
+            )
+
+            is_best = (
+                math.isfinite(smoothed_metric)
+                and smoothed_metric < self.best_val_metric
+            )
             if is_best:
-                self.best_val_rmse = val_rmse
+                self.best_val_metric = smoothed_metric
                 self.epochs_without_improvement = 0
             else:
                 self.epochs_without_improvement += 1
@@ -208,8 +190,8 @@ class PickingTrainer:
 
             logger.info(
                 "Epoch %d/%d | train_loss=%.4f | train_rmse=%.2f | "
-                "val_loss=%.4f | val_rmse=%.2f | val_f1=%.3f | lr=%.2e | "
-                "vram=%.1fMB | throughput=%.1f samples/s%s",
+                "val_loss=%.4f | val_rmse=%.2f | val_f1=%.3f | smoothed=%.2f | "
+                "lr=%.2e | vram=%.1fMB | throughput=%.1f samples/s%s",
                 epoch + 1,
                 self.config.epochs,
                 train_metrics["train_loss"],
@@ -217,6 +199,7 @@ class PickingTrainer:
                 val_metrics["val_loss"],
                 val_metrics["val_rmse_pixels"],
                 val_metrics["val_presence_f1"],
+                smoothed_metric,
                 train_metrics["lr"],
                 max_vram_mb,
                 train_metrics["throughput_samples_per_sec"],
@@ -226,7 +209,7 @@ class PickingTrainer:
             patience = getattr(self.config, "early_stopping_patience", 0)
             if patience > 0 and self.epochs_without_improvement >= patience:
                 logger.info(
-                    "Early stopping triggered after %d epochs without val RMSE improvement.",
+                    "Early stopping triggered after %d epochs without improvement.",
                     self.epochs_without_improvement,
                 )
                 break
@@ -234,23 +217,15 @@ class PickingTrainer:
             if self.device.type == "cuda":
                 torch.cuda.reset_peak_memory_stats(self.device)
 
-        logger.info("Training complete. Best val_rmse=%.4f", self.best_val_rmse)
+        logger.info("Training complete. Best smoothed val_rmse=%.4f", self.best_val_metric)
 
-        # Final training-curve plot.
         plot_training_curves(
             self.metrics_logger.path,
             save_path=self.plots_dir / "training_curves.png",
         )
 
     def _train_epoch(self, epoch: int) -> dict[str, Any]:
-        """Run one training epoch.
-
-        Args:
-            epoch: 0-based epoch index.
-
-        Returns:
-            Dictionary of training metrics.
-        """
+        """Run one training epoch."""
         self.model.train()
         total_loss = 0.0
         total_rmse = 0.0
@@ -261,48 +236,15 @@ class PickingTrainer:
         self.optimizer.zero_grad(set_to_none=True)
 
         for batch_idx, batch in enumerate(self.train_loader):
-            (
-                spectra,
-                pick_target,
-                presence_target,
-                direct_mask,
-                _confidence,
-                cluster_embedding,
-                _spectrum_id,
-            ) = batch
+            spectra, pick_target, direct_mask, _confidence, _cluster_label, _spectrum_id = batch
 
             spectra = spectra.to(self.device, non_blocking=self.config.pin_memory)
-            pick_target = pick_target.to(
-                self.device, non_blocking=self.config.pin_memory
-            )
-            presence_target = presence_target.to(
-                self.device, non_blocking=self.config.pin_memory
-            )
-            direct_mask = direct_mask.to(
-                self.device, non_blocking=self.config.pin_memory
-            )
+            pick_target = pick_target.to(self.device, non_blocking=self.config.pin_memory)
+            direct_mask = direct_mask.to(self.device, non_blocking=self.config.pin_memory)
 
             with self._autocast_context():
-                if (
-                    cluster_embedding is not None
-                    and self.config.use_cluster_conditioning
-                ):
-                    cluster_embedding = cluster_embedding.to(
-                        self.device, non_blocking=self.config.pin_memory
-                    )
-                    pick_logits, presence_logits = self.model(
-                        spectra, cluster_embedding
-                    )
-                else:
-                    pick_logits, presence_logits = self.model(spectra)
-
-                loss, _ = self.criterion(
-                    pick_logits,
-                    presence_logits,
-                    pick_target,
-                    presence_target,
-                    direct_mask,
-                )
+                logits = self.model(spectra)
+                loss, _ = self.criterion(logits, pick_target, direct_mask)
                 loss = loss / self.config.accum_steps
 
             if self.scaler is not None:
@@ -333,30 +275,17 @@ class PickingTrainer:
                 self.optimizer.zero_grad(set_to_none=True)
                 self.global_step += 1
 
-            # Logging on unscaled loss.
             total_loss += loss.item() * self.config.accum_steps
             num_batches += 1
 
             with torch.no_grad():
-                pred_picks, pred_probs = inference_picks(pick_logits, presence_logits)
-                rmse = compute_curve_rmse(
-                    pred_picks, pick_target, presence_target.bool()
-                )
-                f1 = compute_presence_f1(pred_probs, presence_target)
+                pred_picks, presence_probs = inference_picks(logits)
+                true_presence = (pick_target >= 0).float()
+                rmse = compute_curve_rmse(pred_picks, pick_target)
+                f1 = compute_presence_f1(presence_probs, true_presence)
                 if torch.isfinite(rmse):
                     total_rmse += rmse.item()
                 total_f1 += f1.item()
-
-            if batch_idx % self.config.log_interval == 0:
-                current_lr = self.optimizer.param_groups[0]["lr"]
-                logger.debug(
-                    "Epoch %d | Batch %d/%d | loss=%.4f | lr=%.2e",
-                    epoch + 1,
-                    batch_idx,
-                    len(self.train_loader),
-                    loss.item() * self.config.accum_steps,
-                    current_lr,
-                )
 
         dataset_size = len(cast(Sized, self.train_loader.dataset))
         epoch_time = time.perf_counter() - epoch_start
@@ -373,14 +302,7 @@ class PickingTrainer:
 
     @torch.no_grad()
     def _validate(self, epoch: int) -> dict[str, Any]:
-        """Run validation and collect metrics.
-
-        Args:
-            epoch: 0-based epoch index.
-
-        Returns:
-            Dictionary of validation metrics.
-        """
+        """Run validation and collect metrics."""
         _ = epoch
         self.model.eval()
         total_loss = 0.0
@@ -394,50 +316,22 @@ class PickingTrainer:
         all_pred: list[torch.Tensor] = []
         all_probs: list[torch.Tensor] = []
         all_logits: list[torch.Tensor] = []
-        all_presence_targets: list[torch.Tensor] = []
 
         for batch in self.val_loader:
-            (
-                spectra,
-                pick_target,
-                presence_target,
-                direct_mask,
-                _confidence,
-                cluster_embedding,
-                _spectrum_id,
-            ) = batch
+            spectra, pick_target, direct_mask, _confidence, _cluster_label, _spectrum_id = batch
 
             spectra = spectra.to(self.device, non_blocking=self.config.pin_memory)
-            pick_target = pick_target.to(
-                self.device, non_blocking=self.config.pin_memory
-            )
-            presence_target = presence_target.to(
-                self.device, non_blocking=self.config.pin_memory
-            )
-            direct_mask = direct_mask.to(
-                self.device, non_blocking=self.config.pin_memory
-            )
+            pick_target = pick_target.to(self.device, non_blocking=self.config.pin_memory)
+            direct_mask = direct_mask.to(self.device, non_blocking=self.config.pin_memory)
 
-            if cluster_embedding is not None and self.config.use_cluster_conditioning:
-                cluster_embedding = cluster_embedding.to(
-                    self.device, non_blocking=self.config.pin_memory
-                )
-                pick_logits, presence_logits = self.model(spectra, cluster_embedding)
-            else:
-                pick_logits, presence_logits = self.model(spectra)
-
-            loss, _ = self.criterion(
-                pick_logits,
-                presence_logits,
-                pick_target,
-                presence_target,
-                direct_mask,
-            )
+            logits = self.model(spectra)
+            loss, _ = self.criterion(logits, pick_target, direct_mask)
             total_loss += loss.item()
 
-            pred_picks, pred_probs = inference_picks(pick_logits, presence_logits)
-            rmse = compute_curve_rmse(pred_picks, pick_target, presence_target.bool())
-            f1 = compute_presence_f1(pred_probs, presence_target)
+            pred_picks, presence_probs = inference_picks(logits)
+            true_presence = (pick_target >= 0).float()
+            rmse = compute_curve_rmse(pred_picks, pick_target)
+            f1 = compute_presence_f1(presence_probs, true_presence)
             coverage = compute_coverage(pred_picks)
 
             if torch.isfinite(rmse):
@@ -446,14 +340,12 @@ class PickingTrainer:
             total_coverage += coverage.item()
             num_batches += 1
 
-            # Save a few samples for visualization.
             if len(all_spectra) < 16:
                 all_spectra.append(spectra.cpu())
                 all_true.append(pick_target.cpu())
                 all_pred.append(pred_picks.cpu())
-                all_probs.append(pred_probs.cpu())
-                all_logits.append(pick_logits.cpu())
-                all_presence_targets.append(presence_target.cpu())
+                all_probs.append(presence_probs.cpu())
+                all_logits.append(logits.cpu())
 
         if num_batches == 0:
             logger.warning("Validation loader is empty; returning NaN metrics.")
@@ -469,7 +361,6 @@ class PickingTrainer:
         avg_f1 = total_f1 / num_batches
         avg_coverage = total_coverage / num_batches
 
-        # Visualization on a subset of validation samples.
         epoch_1based = epoch + 1
         if epoch_1based in self.config.visualization_epochs and all_spectra:
             vis_spectra = torch.cat(all_spectra, dim=0)[:6]
@@ -477,30 +368,25 @@ class PickingTrainer:
             vis_pred = torch.cat(all_pred, dim=0)[:6]
             vis_probs = torch.cat(all_probs, dim=0)[:6]
             vis_logits = torch.cat(all_logits, dim=0)[:6]
-            vis_presence_targets = torch.cat(all_presence_targets, dim=0)[:6]
 
             plot_curve_overlays(
                 vis_spectra,
                 vis_true,
                 vis_pred,
-                presence_probs=vis_probs,
                 save_path=self.plots_dir
                 / f"curve_predictions_epoch_{epoch_1based:03d}.png",
                 seed=self.config.seed,
             )
             plot_probability_heatmap_overlay(
                 vis_spectra,
-                vis_true,
-                vis_pred,
                 vis_logits,
-                vis_probs,
                 save_path=self.plots_dir
                 / f"probability_heatmaps_epoch_{epoch_1based:03d}.png",
                 seed=self.config.seed,
             )
             plot_certainty_distributions(
                 vis_probs,
-                true_presence=vis_presence_targets,
+                true_presence=(vis_true >= 0).float(),
                 save_path=self.plots_dir
                 / f"certainty_distributions_epoch_{epoch_1based:03d}.png",
             )
@@ -513,12 +399,7 @@ class PickingTrainer:
         }
 
     def _save_checkpoint(self, epoch: int, is_best: bool = False) -> None:
-        """Persist a training checkpoint.
-
-        Args:
-            epoch: 0-based index of the just-completed epoch.
-            is_best: Whether this checkpoint is the best so far.
-        """
+        """Persist a training checkpoint."""
         state = {
             "model": self.model.state_dict(),
             "optimizer": self.optimizer.state_dict(),
@@ -528,18 +409,16 @@ class PickingTrainer:
             "step": self.global_step,
             "seed": self.config.seed,
             "config": self.config.to_dict(),
-            "metrics": {"best_val_rmse": self.best_val_rmse},
+            "metrics": {"best_val_metric": self.best_val_metric},
             "argv": self.argv,
         }
         path = self.checkpoint_dir / f"checkpoint_epoch_{epoch + 1:03d}.pt"
         save_checkpoint(state, path, is_best=is_best)
+        if is_best:
+            self.best_checkpoint_path = path
 
     def _load_checkpoint(self, path: Path) -> None:
-        """Restore training state from a checkpoint.
-
-        Args:
-            path: Path to the checkpoint file.
-        """
+        """Restore training state from a checkpoint."""
         checkpoint = load_checkpoint(path, device=self.device)
         self.model.load_state_dict(checkpoint["model"])
         self.optimizer.load_state_dict(checkpoint["optimizer"])
@@ -548,8 +427,8 @@ class PickingTrainer:
         self.scheduler.load_state_dict(checkpoint["scheduler"])
         self.start_epoch = checkpoint["epoch"] + 1
         self.global_step = checkpoint.get("step", 0)
-        self.best_val_rmse = checkpoint.get("metrics", {}).get(
-            "best_val_rmse", float("inf")
+        self.best_val_metric = checkpoint.get("metrics", {}).get(
+            "best_val_metric", float("inf")
         )
 
         rng_state = checkpoint.get("rng_state")

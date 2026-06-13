@@ -2,9 +2,8 @@
 
 from __future__ import annotations
 
-from pathlib import Path
-
 import json
+from pathlib import Path
 
 import numpy as np
 import pytest
@@ -32,14 +31,14 @@ def sample_data():
     pred_picks[:, 50:200] += rng.integers(-10, 11, size=(n, 150))
     pred_picks = np.clip(pred_picks, 0, h - 1)
 
-    pick_logits = rng.standard_normal((n, 1, h, w)).astype(np.float32)
+    logits = rng.standard_normal((n, h + 1, w)).astype(np.float32)
     presence_probs = rng.random((n, w)).astype(np.float32)
     presence_targets = (true_picks >= 0).astype(np.float32)
     return (
         spectra,
         true_picks,
         pred_picks,
-        pick_logits,
+        logits,
         presence_probs,
         presence_targets,
     )
@@ -47,10 +46,10 @@ def sample_data():
 
 def test_plot_curve_overlays_creates_file(sample_data, tmp_path: Path):
     """Curve overlay figure is written to disk."""
-    spectra, true_picks, pred_picks, _, presence_probs, _ = sample_data
+    spectra, true_picks, pred_picks, _, _, _ = sample_data
     save_path = tmp_path / "curves.png"
     plot_curve_overlays(
-        spectra, true_picks, pred_picks, presence_probs, save_path=save_path, seed=1
+        spectra, true_picks, pred_picks, save_path=save_path, seed=1
     )
     assert save_path.exists()
     assert save_path.stat().st_size > 0
@@ -122,14 +121,11 @@ def test_torch_softmax_sums_to_one():
 
 def test_plot_probability_heatmap_overlay_creates_file(sample_data, tmp_path: Path):
     """Probability heatmap overlay figure is written to disk."""
-    spectra, true_picks, pred_picks, pick_logits, presence_probs, _ = sample_data
+    spectra, _, _, logits, _, _ = sample_data
     save_path = tmp_path / "heatmap.png"
     plot_probability_heatmap_overlay(
         spectra,
-        true_picks,
-        pred_picks,
-        pick_logits,
-        presence_probs,
+        logits,
         save_path=save_path,
         seed=2,
     )

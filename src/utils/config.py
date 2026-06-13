@@ -385,14 +385,12 @@ class PickingConfig:
     val_fraction: float = 0.10
     val_seed: int = 42
     min_direct_picks: int = 3
-    use_cluster_conditioning: bool = False
-    cluster_embedding_path: str | None = None
-    cluster_embed_dim: int = 128
+    k_folds: int = 1  # 1 = simple train/val split; >1 = k-fold cross-validation
+    fold_index: int = 0  # which fold to use as validation when k_folds > 1
 
     # Model
-    backbone: str = "unet"  # "unet" or "encoder_decoder"
-    base_channels: int = 32
-    embed_dim: int = 128
+    base_channels: int = 8
+    embed_dim: int = 64
     spectrum_height: int = 256  # must match model input height (wavenumber bins)
     dropout: float = 0.3  # dropout inside conv blocks
 
@@ -412,10 +410,10 @@ class PickingConfig:
     betas: tuple[float, float] = (0.9, 0.95)
     warmup_ratio: float = 0.1
     grad_clip_norm: float = 1.0
-    loss_pick_weight: float = 1.0  # weight for the wavenumber cross-entropy loss
-    loss_bce_weight: float = 0.5
+    loss_pick_weight: float = 1.0
     direct_pick_weight: float = 2.0
-    early_stopping_patience: int = 15  # epochs without val improvement before stop
+    early_stopping_patience: int = 15
+    smooth_window: int = 5  # epochs for moving-average val metric smoothing
     seed: int = 42
 
     # System

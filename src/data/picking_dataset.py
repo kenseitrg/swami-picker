@@ -9,7 +9,7 @@ from typing import Any, Callable
 
 import numpy as np
 import torch
-from sklearn.model_selection import train_test_split
+from sklearn.model_selection import KFold, train_test_split
 from torch.utils.data import Dataset
 
 logger = logging.getLogger(__name__)
@@ -32,20 +32,23 @@ class FKPickingDataset(Dataset):
         val_seed: int = 42,
         min_direct_picks: int = 3,
         transform: Callable | None = None,
-        cluster_embeddings: dict[str, np.ndarray] | None = None,
+        k_folds: int = 1,
+        fold_index: int = 0,
     ) -> None:
         """Initialize the picking dataset.
 
         Args:
             npz_path: Path to the Phase 4 ``.npz`` file.
             split: ``"train"`` or ``"val"``.
-            val_fraction: Fraction of data to hold out for validation.
-            val_seed: Seed for the stratified split.
+            val_fraction: Fraction of data to hold out for validation when
+                ``k_folds == 1``.
+            val_seed: Seed for the stratified split when ``k_folds == 1``.
             min_direct_picks: Minimum number of direct picks required for a
                 spectrum to be included.
             transform: Optional pick-synchronized augmentation callable.
-            cluster_embeddings: Optional mapping from spectrum_id to a cluster
-                embedding vector (used when ``use_cluster_conditioning`` is on).
+            k_folds: Number of folds for cross-validation.  ``1`` means a
+                simple train/val split.
+            fold_index: Which fold to use as validation when ``k_folds > 1``.
         """
         self.npz_path = Path(npz_path)
         if split not in {"train", "val"}:
@@ -56,7 +59,8 @@ class FKPickingDataset(Dataset):
         self.val_seed = val_seed
         self.min_direct_picks = min_direct_picks
         self.transform = transform
-        self.cluster_embeddings = cluster_embeddings
+        self.k_folds = k_folds
+        self.fold_index = fold_index
 
         (
             spectra,
@@ -85,14 +89,19 @@ class FKPickingDataset(Dataset):
         spectrum_ids = spectrum_ids[keep]
         metadata = [metadata[i] for i in keep_indices.tolist()]
 
-        # Stratified split by cluster label.
         indices = np.arange(len(spectrum_ids))
-        train_idx, val_idx = train_test_split(
-            indices,
-            test_size=val_fraction,
-            random_state=val_seed,
-            stratify=cluster_labels,
-        )
+        if k_folds > 1:
+            kf = KFold(n_splits=k_folds, shuffle=True, random_state=val_seed)
+            folds = list(kf.split(indices))
+            train_idx, val_idx = folds[fold_index]
+        else:
+            train_idx, val_idx = train_test_split(
+                indices,
+                test_size=val_fraction,
+                random_state=val_seed,
+                stratify=cluster_labels,
+            )
+
         selected = train_idx if split == "train" else val_idx
 
         self.spectra = torch.from_numpy(spectra[selected]).float()
@@ -121,17 +130,7 @@ class FKPickingDataset(Dataset):
         np.ndarray,
         list[dict[str, Any]],
     ]:
-        """Load arrays and parse metadata from the ``.npz`` file.
-
-        Returns:
-            Tuple of ``(spectra, picks, direct_masks, confidences,
-            cluster_labels, spectrum_ids, metadata_list)``.
-
-        Raises:
-            FileNotFoundError: If ``npz_path`` does not exist.
-            KeyError: If a required array is missing.
-            ValueError: If metadata cannot be parsed.
-        """
+        """Load arrays and parse metadata from the ``.npz`` file."""
         if not self.npz_path.exists():
             raise FileNotFoundError(f"Training data not found: {self.npz_path}")
 
@@ -144,8 +143,6 @@ class FKPickingDataset(Dataset):
             spectrum_ids = data["spectrum_ids"]
 
             raw_metadata = data["metadata"]
-            # The metadata array may be stored as a single JSON string (0-d)
-            # or as an object array of dicts. Handle both.
             if raw_metadata.ndim == 0:
                 metadata = json.loads(raw_metadata.item())
             else:
@@ -176,47 +173,32 @@ class FKPickingDataset(Dataset):
         torch.Tensor,
         torch.Tensor,
         torch.Tensor,
-        torch.Tensor | None,
         str,
     ]:
         """Return a single training example.
 
-        Args:
-            index: Index into the split.
-
         Returns:
-            Tuple of ``(spectrum, pick_target, presence_target, direct_mask,
-            confidence, cluster_embedding, spectrum_id)``. ``pick_target``
-            uses ``-1`` for unpicked columns; ``presence_target`` is ``1.0``
-            where a pick exists and ``0.0`` otherwise.
+            Tuple of ``(spectrum, pick_target, direct_mask, confidence,
+            cluster_label, spectrum_id)``.  ``pick_target`` uses ``-1``
+            for unpicked columns.
         """
         spectrum = self.spectra[index]
         pick_target = self.picks[index].float()
         direct_mask = self.direct_masks[index]
         confidence = self.confidences[index]
+        cluster_label = self.cluster_labels[index]
         spectrum_id = str(self.spectrum_ids[index])
 
-        presence_target = (pick_target >= 0).float()
-
         if self.transform is not None:
-            spectrum, pick_target, presence_target, direct_mask, confidence = (
-                self.transform(
-                    spectrum, pick_target, presence_target, direct_mask, confidence
-                )
+            spectrum, pick_target, _, direct_mask, confidence = self.transform(
+                spectrum, pick_target, torch.zeros_like(pick_target), direct_mask, confidence
             )
-
-        cluster_embedding: torch.Tensor | None = None
-        if self.cluster_embeddings is not None:
-            vec = self.cluster_embeddings.get(spectrum_id)
-            if vec is not None:
-                cluster_embedding = torch.from_numpy(vec).float()
 
         return (
             spectrum,
             pick_target,
-            presence_target,
             direct_mask,
             confidence,
-            cluster_embedding,
+            cluster_label,
             spectrum_id,
         )

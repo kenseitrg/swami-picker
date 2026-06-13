@@ -8,7 +8,6 @@ import sys
 from datetime import datetime
 from pathlib import Path
 
-import numpy as np
 import torch
 from torch.utils.data import DataLoader
 
@@ -33,46 +32,6 @@ def _setup_logging() -> None:
         format="%(asctime)s [%(levelname)s] %(name)s: %(message)s",
         datefmt="%Y-%m-%d %H:%M:%S",
     )
-
-
-def _load_cluster_embeddings(config: PickingConfig) -> dict[str, np.ndarray] | None:
-    """Load optional cluster embeddings for conditional training.
-
-    Args:
-        config: Training configuration.
-
-    Returns:
-        Mapping from ``spectrum_id`` to embedding vector, or ``None`` if
-        conditioning is disabled or the embedding file is missing.
-    """
-    if not config.use_cluster_conditioning:
-        return None
-
-    if config.cluster_embedding_path is None:
-        logger.warning(
-            "use_cluster_conditioning=True but cluster_embedding_path is None; "
-            "disabling conditioning."
-        )
-        return None
-
-    path = Path(config.cluster_embedding_path)
-    if not path.exists():
-        logger.warning(
-            "Cluster embedding file not found: %s; disabling conditioning.", path
-        )
-        return None
-
-    with np.load(path, allow_pickle=True) as data:
-        spectrum_ids = np.array(data["spectrum_ids"])
-        embeddings = np.array(data["embeddings"])
-
-    embeddings = {str(sid): embeddings[i] for i, sid in enumerate(spectrum_ids)}
-    logger.info(
-        "Loaded %d cluster embeddings of dimension %d",
-        len(embeddings),
-        next(iter(embeddings.values())).shape[0],
-    )
-    return embeddings
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -129,8 +88,6 @@ def main(argv: list[str] | None = None) -> int:
     logger.info("Run directory: %s", run_dir)
     logger.info("Device: %s", device)
 
-    cluster_embeddings = _load_cluster_embeddings(config)
-
     transform = PickSyncTransform(
         enabled=config.aug_enabled and not args.dry_run,
         noise_std=config.aug_noise_std,
@@ -146,7 +103,8 @@ def main(argv: list[str] | None = None) -> int:
         val_seed=config.val_seed,
         min_direct_picks=config.min_direct_picks,
         transform=transform,
-        cluster_embeddings=cluster_embeddings,
+        k_folds=config.k_folds,
+        fold_index=config.fold_index,
     )
     val_ds = FKPickingDataset(
         npz_path=Path(config.training_data_path),
@@ -155,11 +113,11 @@ def main(argv: list[str] | None = None) -> int:
         val_seed=config.val_seed,
         min_direct_picks=config.min_direct_picks,
         transform=None,
-        cluster_embeddings=cluster_embeddings,
+        k_folds=config.k_folds,
+        fold_index=config.fold_index,
     )
 
     if args.dry_run:
-        # Use a tiny deterministic subset for smoke testing.
         subset_size = min(32, len(train_ds))
         train_indices = list(range(subset_size))
         val_indices = list(range(min(8, len(val_ds))))
@@ -192,8 +150,7 @@ def main(argv: list[str] | None = None) -> int:
     model = build_picking_model(config)
     n_params = sum(p.numel() for p in model.parameters())
     logger.info(
-        "Model: %s | parameters=%.2fM",
-        config.backbone,
+        "Model parameters=%.2fM",
         n_params / 1e6,
     )
 
@@ -210,7 +167,7 @@ def main(argv: list[str] | None = None) -> int:
     )
     trainer.train()
 
-    logger.info("Training complete. Best val_rmse=%.4f", trainer.best_val_rmse)
+    logger.info("Training complete. Best smoothed val_rmse=%.4f", trainer.best_val_metric)
     return 0
 
 

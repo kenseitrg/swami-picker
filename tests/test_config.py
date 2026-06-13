@@ -14,9 +14,10 @@ def test_picking_config_round_trip(tmp_path: Path) -> None:
     config = PickingConfig(
         training_data_path="custom.npz",
         batch_size=8,
-        backbone="encoder_decoder",
-        use_cluster_conditioning=True,
-        cluster_embedding_path="embed.npz",
+        base_channels=8,
+        embed_dim=64,
+        dropout=0.2,
+        k_folds=5,
     )
     path = tmp_path / "picking.yaml"
     config.save_yaml(path)
@@ -24,9 +25,10 @@ def test_picking_config_round_trip(tmp_path: Path) -> None:
 
     assert loaded.training_data_path == "custom.npz"
     assert loaded.batch_size == 8
-    assert loaded.backbone == "encoder_decoder"
-    assert loaded.use_cluster_conditioning is True
-    assert loaded.cluster_embedding_path == "embed.npz"
+    assert loaded.base_channels == 8
+    assert loaded.embed_dim == 64
+    assert loaded.dropout == 0.2
+    assert loaded.k_folds == 5
     assert loaded.betas == (0.9, 0.95)
 
 
@@ -35,7 +37,8 @@ def test_picking_config_default_loads_from_project_yaml() -> None:
     path = Path("configs/phase4_picking.yaml")
     config = PickingConfig.from_yaml(path)
 
-    assert config.backbone in {"unet", "encoder_decoder"}
+    assert config.base_channels == 8
+    assert config.embed_dim == 64
     assert config.spectrum_height == 256
     assert config.val_fraction > 0 and config.val_fraction < 1
     assert isinstance(config.visualization_epochs, list)
@@ -44,7 +47,7 @@ def test_picking_config_default_loads_from_project_yaml() -> None:
 def test_picking_config_rejects_unknown_keys(tmp_path: Path) -> None:
     """Unknown keys in the YAML must raise TypeError."""
     path = tmp_path / "bad.yaml"
-    path.write_text("backbone: unet\nunknown_key: 123\n")
+    path.write_text("base_channels: 8\nunknown_key: 123\n")
 
     with pytest.raises(TypeError):
         PickingConfig.from_yaml(path)

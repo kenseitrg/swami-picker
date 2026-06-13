@@ -8,96 +8,72 @@ import torch.nn.functional as F
 
 
 class PickingLoss(nn.Module):
-    """Combined pick-classification + presence loss.
+    """Single 257-class cross-entropy loss per frequency column.
 
-    Each frequency column is treated as a 256-way classification over
-    wavenumber bins.  Direct (human-clicked) picks are weighted higher
-    than interpolated picks.  A separate presence head learns which
-    frequency columns actually contain a visible mode.
+    Each frequency column is classified into one of
+    ``num_classes = spectrum_height + 1`` classes.  The last class is
+    "no pick".  Direct (human-clicked) picks are weighted higher than
+    interpolated picks.
     """
 
     def __init__(
         self,
         pick_weight: float = 1.0,
-        bce_weight: float = 0.5,
         direct_pick_weight: float = 2.0,
+        absent_class: int | None = None,
     ) -> None:
         """Initialize the loss.
 
         Args:
-            pick_weight: Weight for the wavenumber cross-entropy loss.
-            bce_weight: Weight for the presence BCE loss.
+            pick_weight: Global multiplier for the pick loss.
             direct_pick_weight: Multiplicative weight for direct picks
                 relative to interpolated picks.
+            absent_class: Index of the "no pick" class.  Defaults to the
+                last class.
         """
         super().__init__()
         self.pick_weight = pick_weight
-        self.bce_weight = bce_weight
         self.direct_pick_weight = direct_pick_weight
+        self.absent_class = absent_class
 
     def forward(
         self,
-        pick_logits: torch.Tensor,
-        presence_logits: torch.Tensor,
+        logits: torch.Tensor,
         pick_target: torch.Tensor,
-        presence_target: torch.Tensor,
         direct_mask: torch.Tensor,
     ) -> tuple[torch.Tensor, dict[str, torch.Tensor]]:
-        """Compute the combined loss.
+        """Compute the weighted cross-entropy loss.
 
         Args:
-            pick_logits: Tensor of shape ``(B, 1, H, W)`` where ``H`` is
-                the wavenumber axis and ``W`` is the frequency axis.
-            presence_logits: Tensor of shape ``(B, 1, H, W)``.
+            logits: Tensor of shape ``(B, num_classes, W)``.
             pick_target: Tensor of shape ``(B, W)`` containing wavenumber
-                indices in ``[0, H-1]`` or ``-1`` for unpicked columns.
-            presence_target: Tensor of shape ``(B, W)`` with ``1.0`` where
-                a pick exists and ``0.0`` otherwise.
+                indices in ``[0, H-1]`` or ``-1`` / ``H`` for unpicked
+                columns.
             direct_mask: Bool tensor of shape ``(B, W)`` indicating direct
                 (human-clicked) picks.
 
         Returns:
             Tuple of ``(total_loss, loss_dict)`` where ``loss_dict``
-            contains ``pick_loss`` and ``presence_loss``.
+            contains ``pick_loss``.
         """
-        batch_size, _, h, w = pick_logits.shape
-        eps = 1e-6
+        if self.absent_class is None:
+            self.absent_class = logits.shape[1] - 1
+
+        # Convert -1 sentinel to the absent class index.
+        target = pick_target.clone()
+        target[target < 0] = self.absent_class
+        target = target.long()
 
         # Cross-entropy expects (N, C, ...) and target (N, ...).
-        # Squeeze channel dimension: (B, H classes, W positions).
-        pick_heatmap = pick_logits.squeeze(1)  # (B, H, W)
+        ce = F.cross_entropy(logits, target, reduction="none")  # (B, W)
 
-        # Mask out unpicked columns (-1) before cross_entropy.
-        valid = pick_target >= 0  # (B, W)
-        pick_target_clamped = pick_target.clamp(min=0).long()
-
-        ce = F.cross_entropy(
-            pick_heatmap,
-            pick_target_clamped,
-            reduction="none",
-        )  # (B, W)
-
-        # Weight direct picks higher; mask invalid columns.
+        # Weight direct picks higher; absent columns are still graded
+        # because the model must learn to predict absence explicitly.
         weights = torch.where(direct_mask, self.direct_pick_weight, 1.0)
-        ce = ce * weights * presence_target * valid.float()
+        ce = ce * weights
 
-        # Use a weighted normalizer so the effective direct-pick weight is
-        # exactly ``direct_pick_weight`` relative to interpolated picks.
-        normalizer = (weights * presence_target * valid.float()).sum() + eps
+        normalizer = weights.sum() + 1e-6
         pick_loss = ce.sum() / normalizer
 
-        # Presence loss: one logit per frequency column.
-        presence_pred = presence_logits.squeeze(1).mean(dim=1)  # (B, W)
-        presence_loss = F.binary_cross_entropy_with_logits(
-            presence_pred,
-            presence_target,
-            reduction="mean",
-        )
-
-        total_loss = self.pick_weight * pick_loss + self.bce_weight * presence_loss
-
-        loss_dict = {
-            "pick_loss": pick_loss.detach(),
-            "presence_loss": presence_loss.detach(),
-        }
-        return total_loss, loss_dict
+        total_loss = self.pick_weight * pick_loss
+        return total_loss, {"pick_loss": pick_loss.detach()}

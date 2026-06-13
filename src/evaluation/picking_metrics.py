@@ -4,7 +4,6 @@ from __future__ import annotations
 
 import logging
 
-import numpy as np
 import torch
 
 logger = logging.getLogger(__name__)
@@ -13,7 +12,7 @@ logger = logging.getLogger(__name__)
 def compute_curve_rmse(
     pred_picks: torch.Tensor,
     true_picks: torch.Tensor,
-    presence_mask: torch.Tensor,
+    presence_mask: torch.Tensor | None = None,
 ) -> torch.Tensor:
     """Compute RMSE in pixel indices on valid (picked) columns.
 
@@ -22,13 +21,16 @@ def compute_curve_rmse(
             wavenumber indices or ``-1``.
         true_picks: Tensor of shape ``(B, W)`` containing ground-truth
             wavenumber indices or ``-1``.
-        presence_mask: Bool tensor of shape ``(B, W)`` indicating columns
-            where a ground-truth pick exists.
+        presence_mask: Optional bool tensor of shape ``(B, W)`` indicating
+            columns where a ground-truth pick exists.  If ``None``, uses
+            ``true_picks >= 0``.
 
     Returns:
         Scalar RMSE tensor.  Returns ``nan`` if no valid columns exist.
     """
-    valid = presence_mask & (true_picks >= 0) & (pred_picks >= 0)
+    valid = (true_picks >= 0) & (pred_picks >= 0)
+    if presence_mask is not None:
+        valid = valid & presence_mask
     if valid.sum() == 0:
         return torch.tensor(float("nan"), device=pred_picks.device)
 
@@ -62,54 +64,9 @@ def compute_presence_f1(
     precision = tp / (tp + fp + 1e-6)
     recall = tp / (tp + fn + 1e-6)
     f1 = 2 * precision * recall / (precision + recall + 1e-6)
-    # Handle all-zero rows (no mode visible): define F1 as 1.0 when both
-    # prediction and target agree there is no mode.
     all_zero = (tp == 0) & (fp == 0) & (fn == 0)
     f1 = torch.where(all_zero, torch.tensor(1.0, device=f1.device), f1)
     return f1.mean()
-
-
-def compute_velocity_error(
-    pred_picks: np.ndarray,
-    true_picks: np.ndarray,
-    metadata: dict,
-) -> tuple[np.ndarray, np.ndarray]:
-    """Compute velocity errors between predicted and true picks.
-
-    Args:
-        pred_picks: Array of shape ``(N,)`` with predicted wavenumber
-            indices or ``-1``.
-        true_picks: Array of shape ``(N,)`` with true wavenumber indices
-            or ``-1``.
-        metadata: Metadata dictionary for one spectrum containing
-            ``freq_axis_resized`` and ``waven_axis_resized``.
-
-    Returns:
-        Tuple of ``(delta_v_over_v, velocity_valid_mask)`` where
-        ``delta_v_over_v`` is an array of relative velocity errors and
-        ``velocity_valid_mask`` is a boolean array of the same length as
-        *delta_v_over_v*, indicating columns where velocities could be
-        computed (positive frequency and wavenumber).
-    """
-    freq_axis = np.asarray(metadata["freq_axis_resized"])
-    waven_axis = np.asarray(metadata["waven_axis_resized"])
-
-    valid = (pred_picks >= 0) & (true_picks >= 0)
-    if not valid.any():
-        return np.array([]), np.array([], dtype=bool)
-
-    f_pred = freq_axis[valid]
-    f_true = freq_axis[valid]
-    k_pred = waven_axis[pred_picks[valid].astype(int)]
-    k_true = waven_axis[true_picks[valid].astype(int)]
-
-    # Avoid division by zero; also skip zero wavenumber.
-    v_mask = (k_true > 0) & (k_pred > 0) & (f_true > 0) & (f_pred > 0)
-    v_pred = f_pred[v_mask] / k_pred[v_mask]
-    v_true = f_true[v_mask] / k_true[v_mask]
-
-    delta_v_over_v = np.abs(v_pred - v_true) / v_true
-    return delta_v_over_v, v_mask
 
 
 def compute_coverage(picks: torch.Tensor) -> torch.Tensor:

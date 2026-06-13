@@ -6,7 +6,6 @@ import json
 
 import numpy as np
 import pytest
-import torch
 
 from src.data.picking_dataset import FKPickingDataset
 
@@ -23,7 +22,6 @@ def fake_phase4_npz(tmp_path):
         ).astype(np.int16)
 
     direct_masks = picks >= 0
-    # Make one spectrum fail the min_direct_picks filter.
     direct_masks[0, :] = False
     direct_masks[0, 5] = True
 
@@ -46,7 +44,7 @@ def fake_phase4_npz(tmp_path):
     return path
 
 
-def test_load_metadata_json_string(fake_phase4_npz, tmp_path):
+def test_load_metadata_json_string(fake_phase4_npz):
     """Dataset must parse metadata stored as a single JSON string."""
     ds = FKPickingDataset(
         npz_path=fake_phase4_npz,
@@ -55,7 +53,7 @@ def test_load_metadata_json_string(fake_phase4_npz, tmp_path):
         val_seed=1,
         min_direct_picks=3,
     )
-    assert len(ds) == 15  # 20 -> filter 1 -> train 80% of 19
+    assert len(ds) == 15
     assert isinstance(ds.metadata[0], dict)
 
 
@@ -81,6 +79,28 @@ def test_train_val_disjoint(fake_phase4_npz):
     assert train_ids.isdisjoint(val_ids)
 
 
+def test_kfold_disjoint(fake_phase4_npz):
+    """K-fold train and val indices are disjoint."""
+    train = FKPickingDataset(
+        npz_path=fake_phase4_npz,
+        split="train",
+        min_direct_picks=3,
+        k_folds=5,
+        fold_index=0,
+    )
+    val = FKPickingDataset(
+        npz_path=fake_phase4_npz,
+        split="val",
+        min_direct_picks=3,
+        k_folds=5,
+        fold_index=0,
+    )
+    train_ids = set(train.spectrum_ids.tolist())
+    val_ids = set(val.spectrum_ids.tolist())
+    assert train_ids.isdisjoint(val_ids)
+    assert len(val) == 4  # 19 filtered / 5 folds rounds up
+
+
 def test_min_direct_picks_filter(fake_phase4_npz):
     """Spectra below the direct-pick threshold are excluded."""
     ds = FKPickingDataset(
@@ -103,29 +123,14 @@ def test_item_shapes_and_targets(fake_phase4_npz):
         min_direct_picks=3,
     )
 
-    (
-        spectrum,
-        pick_target,
-        presence_target,
-        direct_mask,
-        confidence,
-        cluster_emb,
-        sid,
-    ) = ds[0]
+    spectrum, pick_target, direct_mask, confidence, cluster_label, sid = ds[0]
 
     assert spectrum.shape == (1, 256, 256)
     assert pick_target.shape == (256,)
-    assert presence_target.shape == (256,)
     assert direct_mask.shape == (256,)
     assert confidence.shape == (256,)
-    assert cluster_emb is None
+    assert isinstance(cluster_label.item(), int)
     assert isinstance(sid, str)
-
-    # Presence target matches non-negative picks.
-    valid = pick_target >= 0
-    assert torch.allclose(
-        presence_target[valid], torch.ones_like(presence_target[valid])
-    )
 
 
 def test_split_reproducibility(fake_phase4_npz):
