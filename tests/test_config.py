@@ -37,9 +37,10 @@ def test_picking_config_default_loads_from_project_yaml() -> None:
     path = Path("configs/phase4_picking.yaml")
     config = PickingConfig.from_yaml(path)
 
-    assert config.base_channels == 8
+    assert config.base_channels == 16
     assert config.embed_dim == 64
     assert config.spectrum_height == 256
+    assert config.dropout == 0.5
     assert config.val_fraction > 0 and config.val_fraction < 1
     assert isinstance(config.visualization_epochs, list)
 
