@@ -11,10 +11,12 @@ k_folds: 5
 fold_index: 0
 
 # Model
-base_channels: 8
+# Final architecture (v2.1): larger capacity + strong dropout prevents mode
+# jumping and overfitting on the small annotated dataset.
+base_channels: 16
 embed_dim: 64
 spectrum_height: 256
-dropout: 0.3
+dropout: 0.5
 
 # Augmentation (pick-synchronized)
 aug_enabled: true

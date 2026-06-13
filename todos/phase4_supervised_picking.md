@@ -3,7 +3,7 @@
 > **Status:** Implementation in progress — model refactored to single 257-class head, k-fold CV, smoothed checkpoint selection, smaller model, and cleaner visualizations (2026-06-13).  
 > **Depends on:** Phase 3 (✅ annotations collected)  
 > **Goal:** Train a supervised model that predicts a dense `(256,)` dispersion-curve pick from a raw `(1, 256, 256)` FK spectrum.  
-> **Tests:** 28 passing for Phase 4 modules after refactor; full suite status TBD.
+> **Tests:** 34 passing for Phase 4 modules after refactor; full suite status TBD.
 
 ---
 
@@ -31,7 +31,7 @@
 |----------|--------|-----------|
 | **Input** | Raw preprocessed spectrum `(1, 256, 256)` | Spatial relationships between frequency and wavenumber must be preserved. |
 | **Output representation** | **Single 257-class head** `(B, 257, W)`: 256 wavenumber bins + 1 explicit "no pick" class | Removes separate presence head, preventing the model from being too conservative by hiding behind a presence gate. Every column must choose a wavenumber or absence. |
-| **Backbone** | Compact U-Net with skip connections (`PickingModel`) | Reduced capacity: `base_channels=8`, `embed_dim=64`, ~0.59M params (was 1.06M). Better match to 169 training samples. |
+| **Backbone** | Compact U-Net with skip connections (`PickingModel`) | `base_channels=16`, `embed_dim=64`, ~2.3M params. Larger capacity than the initial v2 refactor because the small dataset still needs enough model capacity to capture multi-mode context; strong dropout (`0.5`) controls overfitting. |
 | **Cluster conditioning** | ❌ **Removed** for v2 | Single-head model makes cluster conditioning harder to integrate; revisit only if needed. |
 | **Augmentation** | **Pick-synchronized** transforms only | `FreqShift` and `WavenShift` move both image and picks consistently; intensity jitter and Gaussian noise leave picks unchanged. |
 | **Validation split** | **K-fold cross-validation** (`k_folds=5`) + stratified by cluster label | Larger, more robust validation sets (~38 spectra) instead of a single tiny 10% hold-out. |
@@ -53,7 +53,9 @@ Implemented. Locked fields after reviewer feedback:
 - Renamed `loss_l1_weight` → `loss_pick_weight` to match cross-entropy semantics.
 - ❌ Removed `backbone`, `use_cluster_conditioning`, `cluster_embedding_path`, `loss_bce_weight` after single-head refactor.
 - Added `k_folds: int = 1` and `fold_index: int = 0` for cross-validation.
-- Added `dropout: float = 0.3` inside conv blocks.
+- Added `dropout: float = 0.5` inside conv blocks.
+- Added `loss_smooth_weight: float` for frequency-axis smoothness.
+- Added `min_val_coverage: float` to avoid selecting collapsed checkpoints.
 - Added `early_stopping_patience: int = 15`.
 - Added `smooth_window: int = 5` for moving-average checkpoint selection.
 
@@ -66,10 +68,10 @@ Implemented. Locked fields after reviewer feedback:
 - `fold_index: int = 0` — which fold to use as validation
 
 **Model**
-- `base_channels: int = 8`
+- `base_channels: int = 16`
 - `embed_dim: int = 64`
 - `spectrum_height: int = 256` — wavenumber bins (must match input height)
-- `dropout: float = 0.3`
+- `dropout: float = 0.5`
 
 **Augmentation (pick-synchronized)**
 - `aug_enabled: bool = True`
@@ -89,6 +91,8 @@ Implemented. Locked fields after reviewer feedback:
 - `grad_clip_norm: float = 1.0`
 - `loss_pick_weight: float = 1.0`
 - `direct_pick_weight: float = 2.0`
+- `loss_smooth_weight: float = 0.05`
+- `min_val_coverage: float = 0.05`
 - `early_stopping_patience: int = 15`
 - `smooth_window: int = 5`
 - `seed: int = 42`
@@ -404,8 +408,8 @@ Run these sequentially (each ~30–60 min on RTX 3060):
 
 | Run | Config | Model | Augmentation | Notes |
 |-----|--------|-------|--------------|-------|
-| `phase4-picking-v2-singlehead` | `configs/phase4_picking.yaml` | Single 257-class head, base=8, embed=64, dropout=0.3 | noise + intensity | Baseline after refactor |
-| `phase4-picking-v2-shifts` | `configs/phase4_picking_shifts.yaml` | Same as above | + freq/waven shift | Test shift-aware aug |
+| `phase4-picking-v2-singlehead` | `configs/phase4_picking.yaml` | Single 257-class head, base=16, embed=64, dropout=0.5 | noise + intensity | Final v2.1 architecture |
+| `phase4-picking-v2-shifts` | `configs/phase4_picking_shifts.yaml` | Same as above | Shifts disabled (shift aug hurt metrics on the small dataset) | Kept for reference |
 
 For each run, append to `experiments/MODEL_CHANGELOG.md` with:
 - `model_version`
@@ -476,6 +480,7 @@ Append to `experiments/MODEL_CHANGELOG.md` before the first run:
 ```
 | 2026-06-12 | phase4-picking-v1 | Phase 4 core library implemented. U-Net picking model on 188 annotated spectra. Two heads: 256-class wavenumber logits + presence logit. Pick-synchronized augmentation. Visualizations: curve overlays, probability heatmaps, certainty distributions. | N/A | N/A | N/A |
 | 2026-06-13 | phase4-picking-v2 | Refactored to single 257-class head (256 bins + absent class). Compact U-Net: base_channels=8, embed_dim=64, dropout=0.3 (~0.59M params). K-fold CV (5 folds). Smoothed val RMSE checkpoint selection. Grayscale probability heatmaps. | N/A | N/A | N/A |
+| 2026-06-13 | phase4-picking-v2.1 | Final architecture: base_channels=16, embed_dim=64, dropout=0.5 (~2.3M params). Added expected-value frequency-axis smoothness loss (weight=0.05). Disabled pick-synchronized shifts; kept noise + intensity jitter. Coverage safeguard on checkpoint selection. | N/A | N/A | N/A |
 ```
 
 After the first training run, fill in best smoothed `val_rmse_pixels`, `val_presence_f1`, and velocity error.
