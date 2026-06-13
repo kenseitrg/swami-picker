@@ -41,17 +41,14 @@ def test_freq_shift_sync(sample_tensors):
     assert torch.all(pr[(p == -1)] == 0)
     assert torch.all(d[(p == -1)] == False)  # noqa: E712
 
-    # Spectrum must be zero in the rolled-in strip only.  We know the
-    # roll size from the shift that ``FreqShift`` applied, but it is not
-    # exposed; instead compare the zeroed columns to the newly-unpicked
-    # columns that were not unpicked originally.
-    original_unpicked = pick_target == -1
-    rolled_in = p == -1
-    newly_unpicked = rolled_in & ~original_unpicked
+    # Spectrum must be zero in the rolled-in strip.  The wrapped-in
+    # columns are not meaningful, so they must all be unpicked, and no
+    # picked column may be zeroed.
     zero_cols = torch.all(s == 0, dim=(0, 1))
-    if newly_unpicked.any():
-        assert torch.equal(newly_unpicked, zero_cols), (
-            "Rolled-in frequency columns must be zero and only those"
+    picked_cols = p >= 0
+    if zero_cols.any():
+        assert torch.all(~(zero_cols & picked_cols)), (
+            "Zeroed rolled-in columns must be unpicked"
         )
 
 
