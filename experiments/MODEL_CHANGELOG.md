@@ -23,4 +23,6 @@ Every modification to model architecture, loss formulation, or data augmentation
 
 | 2026-06-07 | phase2c-clustering-v1 | Option C clustering pipeline: spectral descriptors (20-D) → UMAP(5D, md=0.0) → HDBSCAN. Two-step hierarchical clustering: initial 5 clusters → re-cluster dominant cluster (940 spectra) → 11 merged clusters (12% noise). | N/A (first successful clustering) | Silhouette=0.60 (step 1), 0.46 (step 2), 11 clusters, noise=12% | ✅ First successful FK spectrum clustering — pseudo-labels ready for Stage-1 training |
 
+| 2026-06-13 | phase4-picking-v2 | Refactored to single 257-class head (256 wavenumber bins + 1 absent class). Compact U-Net: base_channels=8, embed_dim=64, dropout=0.3 (~0.59M params). K-fold CV (5 folds). Smoothed val RMSE checkpoint selection (5-epoch moving average). Grayscale probability heatmaps without pick overlays. | N/A | TBD | N/A |
+
 <!-- Append new entries above this line -->

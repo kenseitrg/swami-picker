@@ -1,9 +1,9 @@
 # Phase 4: Supervised Fine-Tuning & Dispersion Curve Picking — TODO
 
-> **Status:** Implementation in progress — core library complete, scripts pending.  
+> **Status:** Implementation in progress — model refactored to single 257-class head, k-fold CV, smoothed checkpoint selection, smaller model, and cleaner visualizations (2026-06-13).  
 > **Depends on:** Phase 3 (✅ annotations collected)  
 > **Goal:** Train a supervised model that predicts a dense `(256,)` dispersion-curve pick from a raw `(1, 256, 256)` FK spectrum.  
-> **Tests:** 196 passing (Phase 4 modules: 32; visualization: 8; full suite).
+> **Tests:** 28 passing for Phase 4 modules after refactor; full suite status TBD.
 
 ---
 
@@ -30,12 +30,13 @@
 | Decision | Choice | Rationale |
 |----------|--------|-----------|
 | **Input** | Raw preprocessed spectrum `(1, 256, 256)` | Spatial relationships between frequency and wavenumber must be preserved. |
-| **Output representation** | Two heads: (a) `(256,)` wavenumber classification, (b) `(256,)` presence probability | Per-column cross-entropy over 256 wavenumber bins; presence mask handles "no visible mode" columns. |
-| **Backbone** | Lightweight U-Net with skip connections (`SimpleUNetPickingModel`) | Fits on RTX 3060; encoder-decoder variant available as baseline. |
-| **Cluster conditioning** | Optional `ClusterConditionalPickingModel` | Broadcast-adds projected 128-D cluster embedding into U-Net bottleneck. |
+| **Output representation** | **Single 257-class head** `(B, 257, W)`: 256 wavenumber bins + 1 explicit "no pick" class | Removes separate presence head, preventing the model from being too conservative by hiding behind a presence gate. Every column must choose a wavenumber or absence. |
+| **Backbone** | Compact U-Net with skip connections (`PickingModel`) | Reduced capacity: `base_channels=8`, `embed_dim=64`, ~0.59M params (was 1.06M). Better match to 169 training samples. |
+| **Cluster conditioning** | ❌ **Removed** for v2 | Single-head model makes cluster conditioning harder to integrate; revisit only if needed. |
 | **Augmentation** | **Pick-synchronized** transforms only | `FreqShift` and `WavenShift` move both image and picks consistently; intensity jitter and Gaussian noise leave picks unchanged. |
-| **Validation split** | Stratified by cluster label + 10% hold-out | Cluster-stratified to ensure all represented clusters appear in validation. |
-| **Loss** | Wavenumber cross-entropy (weighted by direct/interpolated) + BCE on presence mask | Cross-entropy respects the ordinal heatmap structure; BCE learns where a mode is visible. |
+| **Validation split** | **K-fold cross-validation** (`k_folds=5`) + stratified by cluster label | Larger, more robust validation sets (~38 spectra) instead of a single tiny 10% hold-out. |
+| **Checkpoint selection** | **Smoothed validation RMSE** (5-epoch moving average) | Avoids selecting an overfitted spike due to noisy small validation sets. |
+| **Loss** | Single cross-entropy over 257 classes; direct picks weighted ×2 | Simpler objective; absence is just another class, so the model is graded on coverage and accuracy jointly. |
 | **Coordinate transform** | Re-use Phase 5 helpers from `src/transforms/` (pending) | Model outputs pixel indices; inversion needs Hz and 1/m. |
 
 ---
@@ -50,21 +51,25 @@ Implemented. Locked fields after reviewer feedback:
 - Removed unused `aug_hflip` (dispersion curves are not symmetric).
 - Removed unused `backbone_lr` (model trained end-to-end from scratch).
 - Renamed `loss_l1_weight` → `loss_pick_weight` to match cross-entropy semantics.
-- Added `cluster_embed_dim: int = 128` for conditional model factory.
+- ❌ Removed `backbone`, `use_cluster_conditioning`, `cluster_embedding_path`, `loss_bce_weight` after single-head refactor.
+- Added `k_folds: int = 1` and `fold_index: int = 0` for cross-validation.
+- Added `dropout: float = 0.3` inside conv blocks.
+- Added `early_stopping_patience: int = 15`.
+- Added `smooth_window: int = 5` for moving-average checkpoint selection.
 
 **Data**
 - `training_data_path: str = "data/processed/phase4_training_data.npz"`
-- `val_fraction: float = 0.10`
+- `val_fraction: float = 0.10` (used only when `k_folds == 1`)
 - `val_seed: int = 42`
 - `min_direct_picks: int = 3` — filter spectra below this threshold
-- `use_cluster_conditioning: bool = False`
-- `cluster_embedding_path: str | None = None` — path to `mlp_embeddings_phase3.npz` if conditioning used
+- `k_folds: int = 5` — number of CV folds
+- `fold_index: int = 0` — which fold to use as validation
 
 **Model**
-- `backbone: str = "unet"` — `"unet"` or `"encoder_decoder"`
-- `base_channels: int = 32`
-- `embed_dim: int = 128` — bottleneck / conditioning vector
+- `base_channels: int = 8`
+- `embed_dim: int = 64`
 - `spectrum_height: int = 256` — wavenumber bins (must match input height)
+- `dropout: float = 0.3`
 
 **Augmentation (pick-synchronized)**
 - `aug_enabled: bool = True`
@@ -82,9 +87,10 @@ Implemented. Locked fields after reviewer feedback:
 - `betas: tuple = (0.9, 0.95)`
 - `warmup_ratio: float = 0.1`
 - `grad_clip_norm: float = 1.0`
-- `loss_pick_weight: float = 1.0` — weight for wavenumber cross-entropy loss
-- `loss_bce_weight: float = 0.5`
-- `direct_pick_weight: float = 2.0` — weight direct picks higher than interpolated
+- `loss_pick_weight: float = 1.0`
+- `direct_pick_weight: float = 2.0`
+- `early_stopping_patience: int = 15`
+- `smooth_window: int = 5`
 - `seed: int = 42`
 
 **System**
@@ -138,7 +144,8 @@ class FKPickingDataset(Dataset):
         val_seed: int = 42,
         min_direct_picks: int = 3,
         transform: Callable | None = None,
-        cluster_embeddings: dict[str, ndarray] | None = None,
+        k_folds: int = 1,
+        fold_index: int = 0,
     )
 ```
 
@@ -146,14 +153,14 @@ Responsibilities:
 1. Load `.npz` with `allow_pickle=True`.
 2. Parse metadata JSON string into a list of dicts (or fail gracefully if already a list).
 3. Filter spectra with fewer than `min_direct_picks` direct picks.
-4. Build stratified train/val split by `cluster_labels` using `val_seed`.
-5. Return tuple `(spectrum, pick_target, presence_target, direct_mask, confidence, cluster_embedding_or_none, spectrum_id)`.
+4. Build stratified train/val split by `cluster_labels` using `val_seed`, or use k-fold CV when `k_folds > 1`.
+5. Return tuple `(spectrum, pick_target, direct_mask, confidence, cluster_label, spectrum_id)`.
 
 **Target construction:**
-- `pick_target`: `(256,)` float32. `-1` regions become `NaN` or a masked value. Valid picks in `[0, 255]`.
-- `presence_target`: `(256,)` float32, `1.0` where `pick != -1`, `0.0` otherwise.
+- `pick_target`: `(256,)` float32. `-1` for unpicked columns. Valid picks in `[0, 255]`.
 - `direct_mask`: `(256,)` bool.
 - `confidence`: `(256,)` float32.
+- `cluster_label`: scalar int.
 
 ### 3.2 Create `src/data/picking_augmentations.py` ✅
 
@@ -176,8 +183,9 @@ Return augmented `(spectrum, pick_target, presence_target, direct_mask, confiden
 
 - `test_load_metadata_json_string` — metadata JSON string parsed.
 - `test_train_val_disjoint` — no spectrum in both splits.
+- `test_kfold_disjoint` — k-fold train/val indices are disjoint.
 - `test_min_direct_picks_filter` — spectra below threshold excluded.
-- `test_item_shapes_and_targets` — returns expected tensors and presence target.
+- `test_item_shapes_and_targets` — returns expected tensors.
 - `test_split_reproducibility` — same seed yields identical splits.
 - `test_freq_shift_sync` — after horizontal roll, picks roll by same amount; rolled-in columns marked unpicked.
 - `test_waven_shift_clip` — vertical shift clamps picks to `[0, 255]` and marks OOB as unpicked.
@@ -190,56 +198,41 @@ Return augmented `(spectrum, pick_target, presence_target, direct_mask, confiden
 
 ### 4.1 Create `src/models/picking_model.py` ✅
 
-**Primary: `SimpleUNetPickingModel`** (Option A)
+**`PickingModel`** — single 257-class head.
 
 ```
 Input (B, 1, 256, 256)
     │
-    ├── Encoder ──► (B, 128, 32, 32)
-    │   Conv(1→32) → ReLU → Down
-    │   Conv(32→64) → ReLU → Down
-    │   Conv(64→128) → ReLU → Down
+    ├── Encoder ──► (B, 16, 128, 128)
+    │   Conv(1→8) → ReLU → Down
+    │   Conv(8→16) → ReLU → Down
     │
-    ├── Decoder ──► (B, 32, 256, 256)
-    │   Up → Conv(128→64) → ReLU
-    │   Up → Conv(64→32) → ReLU
-    │   Up → Conv(32→32) → ReLU
+    ├── Bottleneck ──► (B, 64, 64, 64)
+    │   Conv(16→64) → ReLU → Down
     │
-    ├── Pick head ──► (B, 256, 256) logit heatmap
-    │   Conv(32→1, k=1)
+    ├── Decoder ──► (B, 8, 256, 256)
+    │   Up → Conv(64+16→16) → ReLU
+    │   Up → Conv(16+8→8) → ReLU
     │
-    └── Presence head ──► (B, 1, 256, 256)
-        Conv(32→1, k=1)
+    └── Classifier ──► (B, 257, 256)
+        Conv1d(base_channels * H, 257, k=1)
 ```
 
 Forward returns:
-- `pick_logits`: `(B, 256, 256)` — one logit per (frequency, wavenumber)
-- `presence_logits`: `(B, 256, 256)` — one logit per frequency column
+- `logits`: `(B, 257, W)` — one logit per (wavenumber class / absent class, frequency column)
 
-At inference:
-- `pick_idx = argmax(pick_logits, dim=-1)` → `(B, 256)`
-- `presence_prob = sigmoid(presence_logits.mean(dim=-1))` → `(B, 256)`
-- Final pick: `pick_idx` where `presence_prob > threshold`, else `-1`
-
-**Alternative: `EncoderDecoderPickingModel`**
-
-Simpler 3-layer encoder-decoder as described in PROJECT_PLAN.md §4 Option A. Implement if U-Net overfits on 188 samples.
-
-**Cluster-conditional variant (Option B): `ClusterConditionalPickingModel`**
-
-- Load 128-D MLP cluster embedding for the spectrum.
-- Broadcast to spatial grid `(B, 128, 64, 64)` and concatenate to encoder features.
-- Keep as fallback, not default.
+At inference (`inference_picks`):
+- `pick_idx = argmax(logits, dim=1)` → `(B, W)`
+- `presence_prob = 1 - softmax(logits)[:, absent_class, :]` → `(B, W)`
+- Final pick: `pick_idx` where `pick_idx != absent_class`, else `-1`
 
 ### 4.2 Model unit tests (`tests/test_picking_model.py`) ✅
 
-- `test_unet_forward_shape`
-- `test_encoder_decoder_forward_shape`
-- `test_cluster_conditional_forward_shape`
-- `test_cluster_conditional_no_embedding` — falls back to zero conditioning.
+- `test_model_forward_shape`
 - `test_inference_argmax`
-- `test_presence_masking`
-- `test_build_picking_model_*` — factory covers U-Net, conditional, encoder-decoder, unknown backbone.
+- `test_absent_class_masking`
+- `test_present_class_kept`
+- `test_build_picking_model`
 
 ---
 
@@ -249,38 +242,23 @@ Simpler 3-layer encoder-decoder as described in PROJECT_PLAN.md §4 Option A. Im
 
 **Class `PickingLoss`**
 
-Combines:
-1. **Pick classification loss** (per-frequency cross-entropy over 256 wavenumber bins):
-   ```python
-   ce = F.cross_entropy(
-       pick_logits.permute(0, 2, 1),   # (B, 256 freq, 256 waven)
-       pick_target.long(),             # (B, 256)
-       reduction="none",
-   )
-   ce = ce * presence_target * (direct_mask * direct_weight + (1 - direct_mask))
-   pick_loss = ce.sum() / (presence_target.sum() + eps)
-   ```
-   This treats each frequency column as a 256-way classification. Target is the picked wavenumber index; `-1` columns are masked out by `presence_target`.
+Single cross-entropy over 257 classes per frequency column:
 
-2. **Presence BCE loss**:
-   ```python
-   presence_loss = F.binary_cross_entropy_with_logits(
-       presence_logits.squeeze(1), presence_target
-   )
-   ```
+```python
+target = pick_target.clone()
+target[target < 0] = absent_class
+ce = F.cross_entropy(logits, target.long(), reduction="none")
+weights = torch.where(direct_mask, direct_pick_weight, 1.0)
+pick_loss = (ce * weights).sum() / (weights.sum() + eps)
+```
 
-3. **Total**:
-   ```python
-   loss = pick_loss + loss_bce_weight * presence_loss
-   ```
-
-**Rationale:** Cross-entropy per column is a cleaner spatial fit than Smooth L1 on indices because it respects the ordinal nature of wavenumber bins and naturally gives uncertainty. If experiment shows regression is better, add `SmoothL1Loss` on normalized coordinates as an optional head.
+Absence is the last class; every column is graded, so the model cannot avoid coverage by suppressing presence.
 
 ### 5.2 Loss tests (`tests/test_picking_loss.py`) ✅
 
+- `test_unpicked_columns_graded`
+- `test_direct_weight_scaling`
 - `test_loss_decreases_when_correct`
-- `test_presence_mask_zeroes_pick_loss`
-- `test_direct_weight_scaling` — weighted normalizer ensures effective direct-pick weight is exact.
 - `test_loss_components_finite`
 
 ---
@@ -305,9 +283,14 @@ Pattern after `PseudoLabelTrainer`:
 - `train_presence_f1`, `val_presence_f1`
 - `lr`, `max_vram_mb`, `throughput_samples_per_sec`
 
+**Best checkpoint selection:**
+- Maintain a 5-epoch moving average of `val_rmse_pixels`.
+- Save `best_model.pt` only when the smoothed metric improves.
+- Early stopping counts epochs without smoothed improvement.
+
 **Visualization epochs:** generates three plot sets on validation set:
 - curve predictions overlay (true vs. predicted picks)
-- probability heatmap overlays
+- probability heatmap overlays (grayscale spectrum + `hot` probability overlay, no pick curves)
 - presence certainty distributions
 
 ### 6.2 Create `scripts/phase4_picking/train_picking_model.py` ✅
@@ -315,8 +298,7 @@ Pattern after `PseudoLabelTrainer`:
 Implemented. Supports:
 - Args: `--config`, `--resume`, `--name`, `--dry-run`
 - Loads config, sets seed, gets device, enables `cudnn.benchmark` on CUDA
-- Builds `FKPickingDataset` train/val with stratified split
-- Loads optional cluster embeddings for conditional model
+- Builds `FKPickingDataset` train/val with k-fold CV support
 - Builds model via `build_picking_model()` and logs parameter count
 - Instantiates `PickingTrainer` and runs training
 - Saves config snapshot to run directory
@@ -344,7 +326,7 @@ Functions:
 
 - `plot_curve_overlays` — grid of spectra with red=true, green=pred curves.
 - `plot_training_curves` — loss, RMSE, presence F1, LR, VRAM.
-- `plot_probability_heatmap_overlay` — spectrum with translucent softmax probability heatmap overlay.
+- `plot_probability_heatmap_overlay` — grayscale spectrum with translucent `hot` probability heatmap overlay (no pick curves).
 - `plot_certainty_distributions` — histograms of presence probabilities, split by ground truth.
 - `plot_column_error_heatmap` — spectrum with red overlay proportional to per-column pick error.
 - `plot_error_distribution` — histogram of per-spectrum RMSE values.
@@ -420,12 +402,10 @@ Output one file per spectrum with columns:
 
 Run these sequentially (each ~30–60 min on RTX 3060):
 
-| Run | Architecture | Augmentation | Cluster Conditioning | Purpose |
-|-----|--------------|--------------|----------------------|---------|
-| `picking-unet-v1` | U-Net | noise + intensity | No | Primary candidate |
-| `picking-unet-v2` | U-Net | + freq/waven shift | No | Test shift-aware aug |
-| `picking-encdec-v1` | Encoder-decoder | noise + intensity | No | Lower-capacity baseline |
-| `picking-unet-cond-v1` | U-Net | noise + intensity | Yes | Fallback if clusters vary |
+| Run | Config | Model | Augmentation | Notes |
+|-----|--------|-------|--------------|-------|
+| `phase4-picking-v2-singlehead` | `configs/phase4_picking.yaml` | Single 257-class head, base=8, embed=64, dropout=0.3 | noise + intensity | Baseline after refactor |
+| `phase4-picking-v2-shifts` | `configs/phase4_picking_shifts.yaml` | Same as above | + freq/waven shift | Test shift-aware aug |
 
 For each run, append to `experiments/MODEL_CHANGELOG.md` with:
 - `model_version`
@@ -441,8 +421,9 @@ Before declaring Phase 4 complete:
 | Check | Target | How to Verify |
 |-------|--------|---------------|
 | Training stability | Val loss decreases, no NaN/Inf | `metrics.jsonl` |
-| Picking RMSE (model space) | < 3 pixels on valid columns | `val_rmse_pixels` |
+| Picking RMSE (model space) | < 3 pixels on valid columns | Smoothed `val_rmse_pixels` |
 | Presence/absence F1 | > 0.85 | `val_presence_f1` |
+| Coverage | Predicted coverage within 10% of true coverage | `val_coverage` |
 | Overfitting gap | `train_rmse - val_rmse` < 2 pixels | Loss curves |
 | Visual sanity | Predicted curves follow visible mode energy | Curve overlay plots |
 | VRAM peak | < 4.5 GB | `max_vram_mb` |
@@ -452,25 +433,27 @@ Before declaring Phase 4 complete:
 
 If **all pass** → freeze best model, run inference on all 1,392 spectra, export dispersion curves, proceed to Phase 5 (full coordinate transform / inversion export) or close Phase 4.
 
-If **RMSE > 5 pixels** → increase annotation count, try cluster conditioning, or add a transformer-style non-local block.
+If **RMSE > 5 pixels** → increase annotation count, try a slightly larger model, or add a transformer-style non-local block.
 
 If **overfitting gap > 3 pixels** → reduce model capacity, increase dropout, or add heavier augmentation.
+
+If **coverage is much lower than true coverage** → the single-head model is still too conservative; revisit class weighting or add an explicit coverage penalty.
 
 ---
 
 ## 12. Implementation Order
 
-1. **`src/utils/config.py::PickingConfig`** + `configs/phase4_picking.yaml`
-2. **`src/data/picking_dataset.py`** + tests (parse metadata string, stratified split)
-3. **`src/data/picking_augmentations.py`** + tests (pick-synchronized shifts)
-4. **`src/models/picking_model.py`** + tests (U-Net + optional conditioning)
-5. **`src/training/picking_loss.py`** + tests
-6. **`src/training/picking_trainer.py`**
-7. **`src/evaluation/picking_metrics.py`** + `src/evaluation/visualize_picking.py`
-8. **`src/transforms/coordinates.py`** + tests
-9. **`scripts/phase4_picking/train_picking_model.py`**
-10. **`scripts/phase4_picking/run_inference.py`**
-11. **`scripts/phase4_picking/export_dispersion_curves.py`**
+1. ✅ **`src/utils/config.py::PickingConfig`** + `configs/phase4_picking.yaml` + `configs/phase4_picking_shifts.yaml`
+2. ✅ **`src/data/picking_dataset.py`** + tests (k-fold CV support)
+3. ✅ **`src/data/picking_augmentations.py`** + tests
+4. ✅ **`src/models/picking_model.py`** + tests (single 257-class head, compact U-Net)
+5. ✅ **`src/training/picking_loss.py`** + tests (single cross-entropy)
+6. ✅ **`src/training/picking_trainer.py`** + tests (smoothed metric selection)
+7. ✅ **`src/evaluation/picking_metrics.py`** + `src/evaluation/visualize_picking.py`
+8. ⏳ **`src/transforms/coordinates.py`** + tests
+9. ✅ **`scripts/phase4_picking/train_picking_model.py`**
+10. ⏳ **`scripts/phase4_picking/run_inference.py`**
+11. ⏳ **`scripts/phase4_picking/export_dispersion_curves.py`**
 12. **Smoke test + full run** ⏳
 13. **Update `experiments/MODEL_CHANGELOG.md`** ⏳
 
@@ -480,9 +463,9 @@ If **overfitting gap > 3 pixels** → reduce model capacity, increase dropout, o
 
 | Issue | Location | Fix |
 |-------|----------|-----|
-| Metadata stored as JSON string | `data/processed/phase4_training_data.npz["metadata"]` | Parse in `FKPickingDataset` or re-export from Phase 3 as list of dicts. |
-| Low direct-pick count | Phase 3 annotations | Accept for v1; consider a second annotation pass if model underfits. |
-| Missing cluster `4` | `phase4_training_data.npz["cluster_labels"]` | Document in MODEL_CHANGELOG; cluster-conditional model must handle unseen cluster IDs. |
+| Metadata stored as JSON string | `data/processed/phase4_training_data.npz["metadata"]` | Parse in `FKPickingDataset` or re-export from Phase 3 as list of dicts. ✅ Fixed in `FKPickingDataset._load_npz`. |
+| Low direct-pick count | Phase 3 annotations | Accept for v2; consider a second annotation pass if model underfits. |
+| Missing cluster `4` | `phase4_training_data.npz["cluster_labels"]` | Document in MODEL_CHANGELOG; single-head model has no cluster conditioning, so this is less critical. |
 
 ---
 
@@ -492,10 +475,11 @@ Append to `experiments/MODEL_CHANGELOG.md` before the first run:
 
 ```
 | 2026-06-12 | phase4-picking-v1 | Phase 4 core library implemented. U-Net picking model on 188 annotated spectra. Two heads: 256-class wavenumber logits + presence logit. Pick-synchronized augmentation. Visualizations: curve overlays, probability heatmaps, certainty distributions. | N/A | N/A | N/A |
+| 2026-06-13 | phase4-picking-v2 | Refactored to single 257-class head (256 bins + absent class). Compact U-Net: base_channels=8, embed_dim=64, dropout=0.3 (~0.59M params). K-fold CV (5 folds). Smoothed val RMSE checkpoint selection. Grayscale probability heatmaps. | N/A | N/A | N/A |
 ```
 
-After the first training run, fill in best `val_rmse_pixels`, `val_presence_f1`, and velocity error.
+After the first training run, fill in best smoothed `val_rmse_pixels`, `val_presence_f1`, and velocity error.
 
 ---
 
-*Last updated: 2026-06-12*
+*Last updated: 2026-06-13*
