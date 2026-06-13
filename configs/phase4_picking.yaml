@@ -13,9 +13,10 @@ cluster_embed_dim: 128
 
 # Model
 backbone: "unet"      # "unet" or "encoder_decoder"
-base_channels: 32
+base_channels: 16
 embed_dim: 128
 spectrum_height: 256  # must match model input height (wavenumber bins)
+dropout: 0.3
 
 # Augmentation (pick-synchronized)
 aug_enabled: true
@@ -36,6 +37,7 @@ grad_clip_norm: 1.0
 loss_pick_weight: 1.0  # weight for the wavenumber cross-entropy loss
 loss_bce_weight: 0.5
 direct_pick_weight: 2.0
+early_stopping_patience: 15
 seed: 42
 
 # System

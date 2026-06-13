@@ -394,6 +394,7 @@ class PickingConfig:
     base_channels: int = 32
     embed_dim: int = 128
     spectrum_height: int = 256  # must match model input height (wavenumber bins)
+    dropout: float = 0.3  # dropout inside conv blocks
 
     # Augmentation (pick-synchronized)
     aug_enabled: bool = True
@@ -414,6 +415,7 @@ class PickingConfig:
     loss_pick_weight: float = 1.0  # weight for the wavenumber cross-entropy loss
     loss_bce_weight: float = 0.5
     direct_pick_weight: float = 2.0
+    early_stopping_patience: int = 15  # epochs without val improvement before stop
     seed: int = 42
 
     # System

@@ -19,21 +19,25 @@ import torch.nn.functional as F
 
 
 class ConvBlock(nn.Module):
-    """Two convolutional layers with ReLU activations."""
+    """Two convolutional layers with ReLU activations and optional dropout."""
 
-    def __init__(self, in_channels: int, out_channels: int) -> None:
+    def __init__(
+        self, in_channels: int, out_channels: int, dropout: float = 0.0
+    ) -> None:
         """Initialize the block.
 
         Args:
             in_channels: Number of input channels.
             out_channels: Number of output channels.
+            dropout: Dropout probability applied between the two convolutions.
         """
         super().__init__()
         self.conv1 = nn.Conv2d(in_channels, out_channels, kernel_size=3, padding=1)
         self.conv2 = nn.Conv2d(out_channels, out_channels, kernel_size=3, padding=1)
+        self.dropout = nn.Dropout2d(dropout) if dropout > 0.0 else None
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
-        """Apply two convolutions with ReLU.
+        """Apply two convolutions with ReLU and optional dropout.
 
         Args:
             x: Input tensor of shape ``(B, C, H, W)``.
@@ -42,6 +46,8 @@ class ConvBlock(nn.Module):
             Tensor of shape ``(B, out_channels, H, W)``.
         """
         x = F.relu(self.conv1(x))
+        if self.dropout is not None:
+            x = self.dropout(x)
         x = F.relu(self.conv2(x))
         return x
 
@@ -59,6 +65,7 @@ class SimpleUNetPickingModel(nn.Module):
         in_channels: int = 1,
         base_channels: int = 32,
         embed_dim: int = 128,
+        dropout: float = 0.0,
     ) -> None:
         """Initialize the U-Net picking model.
 
@@ -67,32 +74,34 @@ class SimpleUNetPickingModel(nn.Module):
             base_channels: Width of the first encoder feature map.
             embed_dim: Bottleneck feature dimension.  Kept for API
                 compatibility with the conditional variant.
+            dropout: Dropout probability applied inside each ConvBlock.
         """
         super().__init__()
         self.embed_dim = embed_dim
+        self.dropout = dropout
 
         # Encoder
-        self.enc1 = ConvBlock(in_channels, base_channels)
+        self.enc1 = ConvBlock(in_channels, base_channels, dropout=dropout)
         self.pool1 = nn.MaxPool2d(2)
-        self.enc2 = ConvBlock(base_channels, base_channels * 2)
+        self.enc2 = ConvBlock(base_channels, base_channels * 2, dropout=dropout)
         self.pool2 = nn.MaxPool2d(2)
-        self.enc3 = ConvBlock(base_channels * 2, embed_dim)
+        self.enc3 = ConvBlock(base_channels * 2, embed_dim, dropout=dropout)
         self.pool3 = nn.MaxPool2d(2)
 
         # Bottleneck
-        self.bottleneck = ConvBlock(embed_dim, embed_dim)
+        self.bottleneck = ConvBlock(embed_dim, embed_dim, dropout=dropout)
 
         # Decoder
         self.up3 = nn.ConvTranspose2d(embed_dim, embed_dim, kernel_size=2, stride=2)
-        self.dec3 = ConvBlock(embed_dim * 2, embed_dim)
+        self.dec3 = ConvBlock(embed_dim * 2, embed_dim, dropout=dropout)
         self.up2 = nn.ConvTranspose2d(
             embed_dim, base_channels * 2, kernel_size=2, stride=2
         )
-        self.dec2 = ConvBlock(base_channels * 4, base_channels * 2)
+        self.dec2 = ConvBlock(base_channels * 4, base_channels * 2, dropout=dropout)
         self.up1 = nn.ConvTranspose2d(
             base_channels * 2, base_channels, kernel_size=2, stride=2
         )
-        self.dec1 = ConvBlock(base_channels * 2, base_channels)
+        self.dec1 = ConvBlock(base_channels * 2, base_channels, dropout=dropout)
 
         # Heads
         self.pick_head = nn.Conv2d(base_channels, 1, kernel_size=1)
@@ -142,6 +151,7 @@ class EncoderDecoderPickingModel(nn.Module):
         in_channels: int = 1,
         base_channels: int = 32,
         embed_dim: int = 128,
+        dropout: float = 0.0,
     ) -> None:
         """Initialize the encoder-decoder picking model.
 
@@ -149,35 +159,47 @@ class EncoderDecoderPickingModel(nn.Module):
             in_channels: Number of input channels.
             base_channels: Width of the first encoder feature map.
             embed_dim: Bottleneck feature dimension.
+            dropout: Dropout probability applied after ReLU activations.
         """
         super().__init__()
         self.embed_dim = embed_dim
+        self.dropout = nn.Dropout2d(dropout) if dropout > 0.0 else None
 
         self.encoder = nn.Sequential(
             nn.Conv2d(in_channels, base_channels, kernel_size=3, padding=1),
             nn.ReLU(),
+            self._drop(),
             nn.MaxPool2d(2),
             nn.Conv2d(base_channels, base_channels * 2, kernel_size=3, padding=1),
             nn.ReLU(),
+            self._drop(),
             nn.MaxPool2d(2),
             nn.Conv2d(base_channels * 2, embed_dim, kernel_size=3, padding=1),
             nn.ReLU(),
+            self._drop(),
             nn.MaxPool2d(2),
         )
 
         self.decoder = nn.Sequential(
             nn.ConvTranspose2d(embed_dim, embed_dim, kernel_size=2, stride=2),
             nn.ReLU(),
+            self._drop(),
             nn.ConvTranspose2d(embed_dim, base_channels * 2, kernel_size=2, stride=2),
             nn.ReLU(),
+            self._drop(),
             nn.ConvTranspose2d(
                 base_channels * 2, base_channels, kernel_size=2, stride=2
             ),
             nn.ReLU(),
+            self._drop(),
         )
 
         self.pick_head = nn.Conv2d(base_channels, 1, kernel_size=1)
         self.presence_head = nn.Conv2d(base_channels, 1, kernel_size=1)
+
+    def _drop(self) -> nn.Module:
+        """Return a dropout layer or an identity module."""
+        return self.dropout if self.dropout is not None else nn.Identity()
 
     def forward(self, x: torch.Tensor) -> tuple[torch.Tensor, torch.Tensor]:
         """Run the full forward pass.
@@ -210,6 +232,7 @@ class ClusterConditionalPickingModel(nn.Module):
         base_channels: int = 32,
         embed_dim: int = 128,
         cluster_embed_dim: int = 128,
+        dropout: float = 0.0,
     ) -> None:
         """Initialize the conditional picking model.
 
@@ -218,12 +241,14 @@ class ClusterConditionalPickingModel(nn.Module):
             base_channels: Width of the first encoder feature map.
             embed_dim: Bottleneck feature dimension.
             cluster_embed_dim: Dimensionality of the conditioning vector.
+            dropout: Dropout probability passed to the U-Net blocks.
         """
         super().__init__()
         self.unet = SimpleUNetPickingModel(
             in_channels=in_channels,
             base_channels=base_channels,
             embed_dim=embed_dim,
+            dropout=dropout,
         )
         self.cluster_embed_dim = cluster_embed_dim
 
@@ -292,6 +317,7 @@ def build_picking_model(config) -> nn.Module:
     """
     base_channels = config.base_channels
     embed_dim = config.embed_dim
+    dropout = getattr(config, "dropout", 0.0)
 
     if config.backbone == "unet":
         if config.use_cluster_conditioning:
@@ -299,14 +325,17 @@ def build_picking_model(config) -> nn.Module:
                 base_channels=base_channels,
                 embed_dim=embed_dim,
                 cluster_embed_dim=config.cluster_embed_dim,
+                dropout=dropout,
             )
-        return SimpleUNetPickingModel(base_channels=base_channels, embed_dim=embed_dim)
+        return SimpleUNetPickingModel(
+            base_channels=base_channels, embed_dim=embed_dim, dropout=dropout
+        )
 
     if config.backbone == "encoder_decoder":
         if config.use_cluster_conditioning:
             raise ValueError("encoder_decoder does not support cluster conditioning")
         return EncoderDecoderPickingModel(
-            base_channels=base_channels, embed_dim=embed_dim
+            base_channels=base_channels, embed_dim=embed_dim, dropout=dropout
         )
 
     msg = f"Unknown backbone: {config.backbone}"

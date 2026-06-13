@@ -348,17 +348,25 @@ def plot_probability_heatmap_overlay(
         ax_spec.legend()
 
         # Right panel: probability heatmap overlay.
+        # The spectrum is shown in grayscale so the coloured probability
+        # distribution stands out clearly.
         ax_heat = axes[row, 1]
         ax_heat.imshow(
-            spec, aspect="auto", cmap="viridis", extent=extent, origin="upper"
+            spec, aspect="auto", cmap="gray", extent=extent, origin="upper"
         )
+        # Normalize per-column so the peak probability is always visible;
+        # absolute confidence is conveyed by the presence curve/alpha.
+        prob_map_norm = prob_map / (prob_map.max(axis=0, keepdims=True) + 1e-8)
+        alpha_map = 0.25 + 0.55 * prob_map_norm
         im = ax_heat.imshow(
-            prob_map,
+            prob_map_norm,
             aspect="auto",
-            cmap="plasma",
+            cmap="hot",
             extent=extent,
             origin="upper",
-            alpha=0.6,
+            alpha=alpha_map,
+            vmin=0.0,
+            vmax=1.0,
         )
         ax_heat.plot(
             freqs[true_valid],

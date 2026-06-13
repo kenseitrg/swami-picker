@@ -107,6 +107,7 @@ class PickingTrainer:
         self.global_step = 0
         self.start_epoch = 0
         self.best_val_rmse = float("inf")
+        self.epochs_without_improvement = 0
 
         self.metrics_logger = MetricsLogger(run_dir / "metrics.jsonl")
         self.plots_dir = run_dir / "plots"
@@ -191,9 +192,17 @@ class PickingTrainer:
             }
             self.metrics_logger.log(metrics)
 
-            is_best = val_metrics["val_rmse_pixels"] < self.best_val_rmse
+            val_rmse = val_metrics["val_rmse_pixels"]
+            # A val RMSE of 0 usually means no valid predictions were made
+            # (empty intersection of predicted and true picks), so treat it
+            # as invalid for checkpoint selection.
+            val_rmse_finite = math.isfinite(val_rmse) and val_rmse > 0.0
+            is_best = val_rmse_finite and val_rmse < self.best_val_rmse
             if is_best:
-                self.best_val_rmse = val_metrics["val_rmse_pixels"]
+                self.best_val_rmse = val_rmse
+                self.epochs_without_improvement = 0
+            else:
+                self.epochs_without_improvement += 1
 
             self._save_checkpoint(epoch, is_best=is_best)
 
@@ -213,6 +222,14 @@ class PickingTrainer:
                 train_metrics["throughput_samples_per_sec"],
                 " | BEST" if is_best else "",
             )
+
+            patience = getattr(self.config, "early_stopping_patience", 0)
+            if patience > 0 and self.epochs_without_improvement >= patience:
+                logger.info(
+                    "Early stopping triggered after %d epochs without val RMSE improvement.",
+                    self.epochs_without_improvement,
+                )
+                break
 
             if self.device.type == "cuda":
                 torch.cuda.reset_peak_memory_stats(self.device)
