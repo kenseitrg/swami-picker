@@ -93,7 +93,11 @@ class PickingLoss(nn.Module):
         return total_loss, loss_dict
 
     def _smoothness_loss(self, logits: torch.Tensor) -> torch.Tensor:
-        """Penalize large softmax-distribution changes along frequency.
+        """Penalize large changes in the expected wavenumber index.
+
+        This directly encourages the predicted dispersion curve to be
+        smooth along the frequency axis, rather than only asking the
+        full class distribution to be similar between adjacent columns.
 
         Args:
             logits: Tensor of shape ``(B, num_classes, W)``.
@@ -102,6 +106,14 @@ class PickingLoss(nn.Module):
             Scalar smoothness loss.
         """
         probs = F.softmax(logits, dim=1)  # (B, C, W)
-        diff = probs[:, :, 1:] - probs[:, :, :-1]  # (B, C, W-1)
-        # Total-variation-like penalty on the class distributions.
-        return torch.mean(torch.abs(diff))
+        absent_mask = torch.ones(
+            logits.shape[1], dtype=torch.bool, device=logits.device
+        )
+        absent_mask[self.absent_class] = False
+        pick_probs = probs[:, absent_mask, :]  # (B, H, W)
+
+        class_indices = torch.arange(pick_probs.shape[1], device=logits.device).float()
+        expected = (pick_probs * class_indices.view(1, -1, 1)).sum(dim=1)
+        # expected is (B, W); penalize first-order differences.
+        diff = expected[:, 1:] - expected[:, :-1]
+        return torch.mean(diff.abs())

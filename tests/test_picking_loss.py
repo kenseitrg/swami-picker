@@ -102,12 +102,12 @@ def test_smoothness_loss_zero_when_uniform():
 
 
 def test_smoothness_loss_present_with_jumps():
-    """Smoothness loss is positive when adjacent columns differ sharply."""
+    """Smoothness loss is positive when expected wavenumber jumps."""
     loss_fn = PickingLoss(smooth_weight=1.0)
     logits = torch.zeros(1, 257, 256)
-    # Alternating one-hot columns.
-    logits[:, 0, ::2] = 10.0
-    logits[:, 1, 1::2] = 10.0
+    # Even columns predict class 50, odd columns predict class 150.
+    logits[:, 50, ::2] = 10.0
+    logits[:, 150, 1::2] = 10.0
     pick_target = torch.full((1, 256), -1.0)
     direct_mask = torch.zeros_like(pick_target, dtype=torch.bool)
 
