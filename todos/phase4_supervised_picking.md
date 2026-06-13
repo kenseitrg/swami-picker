@@ -3,7 +3,7 @@
 > **Status:** Implementation in progress — core library complete, scripts pending.  
 > **Depends on:** Phase 3 (✅ annotations collected)  
 > **Goal:** Train a supervised model that predicts a dense `(256,)` dispersion-curve pick from a raw `(1, 256, 256)` FK spectrum.  
-> **Tests:** 194 passing (Phase 4 modules: 30; visualization: 8; full suite).
+> **Tests:** 196 passing (Phase 4 modules: 32; visualization: 8; full suite).
 
 ---
 
@@ -310,20 +310,23 @@ Pattern after `PseudoLabelTrainer`:
 - probability heatmap overlays
 - presence certainty distributions
 
-### 6.2 Create `scripts/phase4_picking/train_picking_model.py` ⏳
+### 6.2 Create `scripts/phase4_picking/train_picking_model.py` ✅
 
-Pending. Thin CLI script should:
+Implemented. Supports:
 - Args: `--config`, `--resume`, `--name`, `--dry-run`
-- Load config, set seed, get device
-- Build `FKPickingDataset` train/val
-- Build model, optimizer, scheduler
-- Instantiate `PickingTrainer` and run
-- Save config snapshot to run directory
+- Loads config, sets seed, gets device, enables `cudnn.benchmark` on CUDA
+- Builds `FKPickingDataset` train/val with stratified split
+- Loads optional cluster embeddings for conditional model
+- Builds model via `build_picking_model()` and logs parameter count
+- Instantiates `PickingTrainer` and runs training
+- Saves config snapshot to run directory
+- Dry-run mode: 1 epoch on a 32-sample train / 8-sample val subset
 
 ### 6.3 Unit / smoke tests ✅
 
 - `tests/test_picking_trainer.py` — smoke run for 2 epochs and resume test.
-- CLI dry-run remains pending until script is written.
+- `tests/test_picking_collate.py` — custom collate handles `None` cluster embeddings and string spectrum IDs.
+- `scripts/phase4_picking/train_picking_model.py --dry-run` completed successfully on RTX 3060 (~4.5 GB VRAM).
 
 ---
 
@@ -468,8 +471,8 @@ If **overfitting gap > 3 pixels** → reduce model capacity, increase dropout, o
 9. **`scripts/phase4_picking/train_picking_model.py`**
 10. **`scripts/phase4_picking/run_inference.py`**
 11. **`scripts/phase4_picking/export_dispersion_curves.py`**
-12. **Smoke test + full run**
-13. **Update `experiments/MODEL_CHANGELOG.md`**
+12. **Smoke test + full run** ⏳
+13. **Update `experiments/MODEL_CHANGELOG.md`** ⏳
 
 ---
 

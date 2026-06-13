@@ -198,18 +198,18 @@ class FKPickingDataset(Dataset):
 
         presence_target = (pick_target >= 0).float()
 
-        cluster_embedding: torch.Tensor | None = None
-        if self.cluster_embeddings is not None:
-            vec = self.cluster_embeddings.get(spectrum_id)
-            if vec is not None:
-                cluster_embedding = torch.from_numpy(vec).float()
-
         if self.transform is not None:
             spectrum, pick_target, presence_target, direct_mask, confidence = (
                 self.transform(
                     spectrum, pick_target, presence_target, direct_mask, confidence
                 )
             )
+
+        cluster_embedding: torch.Tensor | None = None
+        if self.cluster_embeddings is not None:
+            vec = self.cluster_embeddings.get(spectrum_id)
+            if vec is not None:
+                cluster_embedding = torch.from_numpy(vec).float()
 
         return (
             spectrum,
