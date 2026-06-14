@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+from collections.abc import Sequence
 from pathlib import Path
 from typing import Any
 
@@ -331,6 +332,253 @@ def plot_certainty_distributions(
         axes[1].legend()
     else:
         axes[1].axis("off")
+
+    plt.tight_layout()
+    if save_path is not None:
+        save_path.parent.mkdir(parents=True, exist_ok=True)
+        plt.savefig(save_path, dpi=300, bbox_inches="tight")
+        plt.close(fig)
+    else:
+        plt.show()
+
+
+def plot_inference_curve_grid(
+    spectra: torch.Tensor | np.ndarray,
+    picks: torch.Tensor | np.ndarray,
+    presence_probs: torch.Tensor | np.ndarray,
+    metadata: list[dict[str, Any]] | None = None,
+    indices: Sequence[int] | None = None,
+    num_samples: int = 8,
+    title: str = "Inference picks",
+    save_path: Path | None = None,
+    seed: int = 42,
+) -> None:
+    """Plot a grid of spectra with inferred dispersion curves.
+
+    Unlike :func:`plot_curve_overlays`, this function does not require
+    ground-truth picks.  It is intended for visualizing model inference
+    outputs on the full dataset.
+
+    Args:
+        spectra: Input spectra of shape ``(N, 1, H, W)``.
+        picks: Dense pick indices of shape ``(N, W)``.
+        presence_probs: Presence probabilities of shape ``(N, W)``.
+        metadata: Optional list of metadata dictionaries.  Used for
+            physical axes and spectrum identifiers.
+        indices: Optional explicit indices into *spectra* to plot.  If
+            ``None``, *num_samples* random indices are chosen using
+            *seed*.
+        num_samples: Number of spectra to display when *indices* is not
+            provided.
+        title: Overall figure title.
+        save_path: Optional path to save the figure.
+        seed: Random seed for sample selection.
+    """
+    apply_style()
+    rng = np.random.default_rng(seed)
+
+    spectra = _to_numpy(spectra)
+    picks = _to_numpy(picks)
+    presence_probs = _to_numpy(presence_probs)
+
+    if indices is None:
+        n = min(num_samples, spectra.shape[0])
+        indices = rng.choice(spectra.shape[0], size=n, replace=False)
+    else:
+        indices = list(indices)
+
+    n = len(indices)
+    cols = (n + 1) // 2
+    fig, axes = plt.subplots(2, cols, figsize=(3.2 * cols, 6.4))
+    axes = np.atleast_2d(axes).flatten()
+
+    for ax, idx in zip(axes, indices, strict=False):
+        spec = spectra[idx, 0]
+        meta = metadata[idx] if metadata else None
+        freqs, waven = _axis_arrays(spec, meta)
+        extent = _extent_from_axes(freqs, waven)
+
+        ax.imshow(spec, aspect="auto", cmap="viridis", extent=extent, origin="upper")
+
+        pred = picks[idx]
+        pred_valid = pred >= 0
+        if pred_valid.any():
+            ax.plot(
+                freqs[pred_valid],
+                waven[pred[pred_valid].astype(int)],
+                "g--",
+                linewidth=1.5,
+                label="Predicted",
+            )
+
+        mean_prob = float(np.mean(presence_probs[idx]))
+        coverage = float(np.mean(pred_valid))
+        subtitle = meta.get("spectrum_id", f"Sample {idx}") if meta else f"Sample {idx}"
+        ax.set_title(f"{subtitle}\ncov={coverage:.2f}, mean_p={mean_prob:.2f}")
+        ax.set_xlabel("Frequency (Hz)" if meta else "Frequency index")
+        ax.set_ylabel("Wavenumber (1/m)" if meta else "Wavenumber index")
+        ax.legend()
+
+    for ax in axes[n:]:
+        ax.axis("off")
+
+    fig.suptitle(title, fontsize=14, y=1.02)
+    plt.tight_layout()
+    if save_path is not None:
+        save_path.parent.mkdir(parents=True, exist_ok=True)
+        plt.savefig(save_path, dpi=300, bbox_inches="tight")
+        plt.close(fig)
+    else:
+        plt.show()
+
+
+def plot_quality_distributions(
+    quality_scores: Sequence[dict[str, Any]],
+    metrics: Sequence[str] | None = None,
+    save_path: Path | None = None,
+) -> None:
+    """Plot histograms of per-spectrum quality metrics.
+
+    Args:
+        quality_scores: Sequence of quality-score records.  Each record
+            must contain the requested metric keys.
+        metrics: Optional list of metric names to plot.  Defaults to a
+            curated set of interpretable metrics.
+        save_path: Optional path to save the figure.
+    """
+    apply_style()
+
+    if metrics is None:
+        metrics = [
+            "coverage",
+            "mean_certainty",
+            "smoothness",
+            "monotonicity",
+            "composite_score",
+        ]
+
+    data: dict[str, np.ndarray] = {}
+    for metric in metrics:
+        values = [float(score[metric]) for score in quality_scores if metric in score]
+        data[metric] = np.array(values, dtype=np.float64)
+
+    n_metrics = len(metrics)
+    cols = (n_metrics + 1) // 2
+    fig, axes = plt.subplots(2, cols, figsize=(4 * cols, 6))
+    axes = np.atleast_2d(axes).flatten()
+
+    for ax, metric in zip(axes, metrics, strict=False):
+        values = data[metric]
+        ax.hist(values, bins=40, edgecolor="black", alpha=0.7)
+        ax.axvline(np.mean(values), color="r", linestyle="--", label="mean")
+        ax.axvline(np.median(values), color="g", linestyle="--", label="median")
+        ax.set_xlabel(metric.replace("_", " ").title())
+        ax.set_ylabel("Count")
+        ax.set_title(f"{metric.replace('_', ' ').title()}\nmean={np.mean(values):.3f}")
+        ax.legend()
+
+    for ax in axes[n_metrics:]:
+        ax.axis("off")
+
+    plt.tight_layout()
+    if save_path is not None:
+        save_path.parent.mkdir(parents=True, exist_ok=True)
+        plt.savefig(save_path, dpi=300, bbox_inches="tight")
+        plt.close(fig)
+    else:
+        plt.show()
+
+
+def plot_quality_scatter(
+    quality_scores: Sequence[dict[str, Any]],
+    x_metric: str = "mean_certainty",
+    y_metric: str = "smoothness",
+    color_metric: str = "composite_score",
+    save_path: Path | None = None,
+) -> None:
+    """Scatter two quality metrics against each other, colored by a third.
+
+    Args:
+        quality_scores: Sequence of quality-score records.
+        x_metric: Metric for the x-axis.
+        y_metric: Metric for the y-axis.
+        color_metric: Metric used for point color.
+        save_path: Optional path to save the figure.
+    """
+    apply_style()
+
+    x = np.array([float(score[x_metric]) for score in quality_scores], dtype=np.float64)
+    y = np.array([float(score[y_metric]) for score in quality_scores], dtype=np.float64)
+    c = np.array(
+        [float(score.get(color_metric, 0.0)) for score in quality_scores],
+        dtype=np.float64,
+    )
+
+    fig, ax = plt.subplots(figsize=(7, 5))
+    scatter = ax.scatter(x, y, c=c, cmap="viridis", alpha=0.6, edgecolors="none", s=30)
+    ax.set_xlabel(x_metric.replace("_", " ").title())
+    ax.set_ylabel(y_metric.replace("_", " ").title())
+    ax.set_title(
+        f"{y_metric.replace('_', ' ').title()} vs {x_metric.replace('_', ' ').title()}"
+    )
+    plt.colorbar(scatter, ax=ax, label=color_metric.replace("_", " ").title())
+
+    plt.tight_layout()
+    if save_path is not None:
+        save_path.parent.mkdir(parents=True, exist_ok=True)
+        plt.savefig(save_path, dpi=300, bbox_inches="tight")
+        plt.close(fig)
+    else:
+        plt.show()
+
+
+def plot_quality_ranking(
+    quality_scores: Sequence[dict[str, Any]],
+    metric: str = "composite_score",
+    top_n: int = 10,
+    bottom_n: int = 10,
+    save_path: Path | None = None,
+) -> None:
+    """Bar chart of the top/bottom spectra by a quality metric.
+
+    Args:
+        quality_scores: Sequence of quality-score records.  Each record
+            must contain ``spectrum_id`` and *metric*.
+        metric: Metric to rank by.
+        top_n: Number of highest-scoring spectra to show.
+        bottom_n: Number of lowest-scoring spectra to show.
+        save_path: Optional path to save the figure.
+    """
+    apply_style()
+
+    ranked = sorted(
+        quality_scores,
+        key=lambda score: float(score[metric]),
+        reverse=True,
+    )
+    top = ranked[:top_n]
+    bottom = ranked[-bottom_n:][::-1]
+
+    top_ids = [score["spectrum_id"] for score in top]
+    top_values = [float(score[metric]) for score in top]
+    bottom_ids = [score["spectrum_id"] for score in bottom]
+    bottom_values = [float(score[metric]) for score in bottom]
+
+    fig, axes = plt.subplots(1, 2, figsize=(14, 5))
+
+    axes[0].barh(range(len(top_ids)), top_values, color="green", alpha=0.7)
+    axes[0].set_yticks(range(len(top_ids)))
+    axes[0].set_yticklabels(top_ids, fontsize=7)
+    axes[0].invert_yaxis()
+    axes[0].set_xlabel(metric.replace("_", " ").title())
+    axes[0].set_title(f"Top {top_n} by {metric.replace('_', ' ').title()}")
+
+    axes[1].barh(range(len(bottom_ids)), bottom_values, color="red", alpha=0.7)
+    axes[1].set_yticks(range(len(bottom_ids)))
+    axes[1].set_yticklabels(bottom_ids, fontsize=7)
+    axes[1].invert_yaxis()
+    axes[1].set_xlabel(metric.replace("_", " ").title())
+    axes[1].set_title(f"Bottom {bottom_n} by {metric.replace('_', ' ').title()}")
 
     plt.tight_layout()
     if save_path is not None:

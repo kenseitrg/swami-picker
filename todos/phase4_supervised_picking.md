@@ -1,9 +1,9 @@
 # Phase 4: Supervised Fine-Tuning & Dispersion Curve Picking — TODO
 
-> **Status:** Implementation complete — final v2.1 model trained and validated. Best val RMSE=3.46 px, smoothed=3.77 px, val F1=0.934, no mode jumps.  
+> **Status:** Implementation complete — final v2.1 model trained and validated. Best val RMSE=3.46 px, smoothed=3.77 px, val F1=0.934, no mode jumps. Full-dataset inference completed on all 1,392 spectra.  
 > **Depends on:** Phase 3 (✅ annotations collected)  
 > **Goal:** Train a supervised model that predicts a dense `(256,)` dispersion-curve pick from a raw `(1, 256, 256)` FK spectrum.  
-> **Tests:** 34 passing for Phase 4 modules after refactor; full suite status TBD.
+> **Tests:** 33 coordinate-transform tests + 11 FK dataset tests passing; full Phase 4 suite passing.
 
 ---
 
@@ -37,7 +37,7 @@
 | **Validation split** | **K-fold cross-validation** (`k_folds=5`) + stratified by cluster label | Larger, more robust validation sets (~38 spectra) instead of a single tiny 10% hold-out. |
 | **Checkpoint selection** | **Smoothed validation RMSE** (5-epoch moving average) | Avoids selecting an overfitted spike due to noisy small validation sets. |
 | **Loss** | Single cross-entropy over 257 classes; direct picks weighted ×2 | Simpler objective; absence is just another class, so the model is graded on coverage and accuracy jointly. |
-| **Coordinate transform** | Re-use Phase 5 helpers from `src/transforms/` (pending) | Model outputs pixel indices; inversion needs Hz and 1/m. |
+| **Coordinate transform** | ✅ Implemented in `src/transforms/coordinates.py` | Model outputs pixel indices; inversion needs Hz and 1/m. |
 
 ---
 
@@ -344,51 +344,75 @@ All plots use `src/utils/plot_style.py`, headless, publication-ready.
 
 ---
 
-## 8. Coordinate Transform Integration (Phase 5 Prep) ⏳
+## 8. Coordinate Transform Integration ✅
 
-### 8.1 Create `src/transforms/coordinates.py`
+### 8.1 Create `src/transforms/coordinates.py` ✅
 
-Implement the matched pair required by PROJECT_RULES §4.2 and PROJECT_PLAN.md §5:
+Implemented the matched pair required by PROJECT_RULES §4.2 and PROJECT_PLAN.md §5:
 
-- `model_indices_to_physical(picks_model, metadata) -> list[tuple[float, float, float, float]]`
-  - Input: `picks_model` `(256,)` int array of wavenumber indices per frequency column.
-  - Output: `(frequency_hz, wavenumber_inv_m, uncertainty_freq, uncertainty_waven)` tuples.
-  - Only for columns where `pick != -1`.
+- `model_indices_to_physical(picks, metadata, presence_probs=..., confidence=..., certainty_strategy="presence") -> PhysicalPicks`
+  - Maps dense `(256,)` wavenumber-index picks to Hz / 1/m using the resized physical axes in metadata.
+  - Propagates **first-order uncertainty**: base 0.5-pixel quantization error scaled by inverse pick certainty (presence probability or confidence), multiplied by local bin width.
+  - Absent picks (`-1`) produce `NaN` wavenumber values/uncertainties.
+  - Certainties are conservative bounds, not calibrated 1σ Gaussian errors.
 
-- `physical_picks_to_model_indices(f_hz, k_inv_m, metadata) -> tuple[int, int]`
-  - Forward transform for round-trip unit tests.
+- `physical_picks_to_model_indices(f_hz, k_inv_m, metadata) -> list[tuple[int, int]]`
+  - Forward transform from physical units to sparse model indices.
 
-### 8.2 Tests (`tests/test_coordinate_transform.py`)
+- `physical_picks_to_dense_model_indices(...)` → dense `(256,)` array via PCHIP interpolation.
 
-- `test_round_trip_linear_axes` — synthetic grid, forward → inverse → compare, RMSE < 1 pixel.
-- `test_round_trip_log_freq` — if log freq transform added later.
-- `test_uncertainty_propagation` — verify first-order uncertainty scaling.
+- `inference_to_annotation_record(...)` → converts model predictions into `AnnotationRecord` objects loadable by the existing picking app.
+
+- `compute_spectrum_quality_score(...)` → composite score (coverage + certainty + relative smoothness + monotonicity) for triaging spectra for manual re-annotation.
+
+- `dispersion_curve_to_dataframe(...)` → exports physical picks with Hz, 1/m, phase velocity, uncertainties, and geographic metadata.
+
+### 8.2 Tests (`tests/test_coordinate_transform.py`) ✅
+
+33 tests covering:
+- Metadata validation (missing keys, non-monotonic axes, descending axes).
+- Forward transform shapes, values, absent-pick handling, uncertainty scaling with presence probability.
+- Inverse transform sparse/dense mappings, out-of-bounds dropping, NaN handling.
+- Round-trip accuracy on linear and log-spaced axes, including non-identity picks.
+- Inference-to-annotation bridge.
+- Quality scoring: physical-picks branch, trend/steep-tail tolerance, spike penalty, weight validation.
+- DataFrame export including integration against real `RL5007_50071009.json` metadata.
 
 ---
 
-## 9. Inference & Export Script ⏳
+## 9. Inference & Export Script ✅
 
-### 9.1 Create `scripts/phase4_picking/run_inference.py`
+### 9.1 Create `scripts/phase4_picking/run_inference.py` ✅
 
-Args:
-- `--checkpoint`: path to trained model checkpoint
-- `--manifest`: path to `data/processed/manifest.json`
-- `--output`: path to output `.npz`
-- `--batch-size`: default 32
-- `--presence-threshold`: default 0.5
+Implemented. Args:
+- `--checkpoint`: path to trained model checkpoint (required).
+- `--manifest`: path to `data/processed/manifest.json` (default).
+- `--config`: optional path to model config YAML; if omitted, config is restored from the checkpoint.
+- `--output`: output `.npz` path (defaults to `<checkpoint-run>/predictions.npz`).
+- `--batch-size`: default 32.
+- `--num-workers`: DataLoader workers (default 4).
+- `--quality-threshold`: composite score threshold for flagging low-quality spectra (default 0.5).
+- `--confidence-threshold`: minimum presence probability to mark a pick as direct in exported annotations (default 0.5).
+- `--export-annotations`: export `.npz` annotation records for review in the picking app.
+- `--seed`: reproducibility seed.
 
 Actions:
-1. Load model from checkpoint, set eval mode.
-2. Iterate over **all** 1,392 spectra in manifest.
-3. For each spectrum, output `(256,)` pick indices + `(256,)` presence probabilities.
-4. Save:
+1. Loads model from checkpoint in eval mode.
+2. Iterates over **all 1,392 spectra** in the manifest (`split=None`).
+3. Outputs `(256,)` pick indices + `(256,)` presence probabilities per spectrum.
+4. Saves:
    ```
    predictions.npz:
-     spectrum_ids: (N,)
-     picks: (N, 256) int16
-     presence_probs: (N, 256) float32
-     metadata: list[dict]
+     spectrum_ids: (1392,)
+     picks: (1392, 256) int16
+     presence_probs: (1392, 256) float32
+     metadata: JSON string of list[dict]
    ```
+5. Saves `quality_scores.json` with per-spectrum composite metrics.
+6. Saves `low_quality_spectra.json` listing spectra below `--quality-threshold`.
+7. Optional: exports `annotations_for_review/spectra/<spectrum_id>.npz` ready for the existing picking app.
+
+**End-to-end run:** 1,392 spectra processed in ~8.8 s at ~158 spectra/s. Composite scores range 0.729–0.950 (mean 0.853). With default threshold 0.5, no spectra flagged; the score distribution is useful for ranking rather than hard filtering.
 
 ### 9.2 Create `scripts/phase4_picking/export_dispersion_curves.py`
 
@@ -454,9 +478,9 @@ If **coverage is much lower than true coverage** → the single-head model is st
 5. ✅ **`src/training/picking_loss.py`** + tests (single cross-entropy)
 6. ✅ **`src/training/picking_trainer.py`** + tests (smoothed metric selection)
 7. ✅ **`src/evaluation/picking_metrics.py`** + `src/evaluation/visualize_picking.py`
-8. ⏳ **`src/transforms/coordinates.py`** + tests
+8. ✅ **`src/transforms/coordinates.py`** + tests
 9. ✅ **`scripts/phase4_picking/train_picking_model.py`**
-10. ⏳ **`scripts/phase4_picking/run_inference.py`**
+10. ✅ **`scripts/phase4_picking/run_inference.py`**
 11. ⏳ **`scripts/phase4_picking/export_dispersion_curves.py`**
 12. **Smoke test + full run** ✅
 13. **Update `experiments/MODEL_CHANGELOG.md`** ✅
@@ -487,4 +511,4 @@ After the first training run, fill in best smoothed `val_rmse_pixels`, `val_pres
 
 ---
 
-*Last updated: 2026-06-13*
+*Last updated: 2026-06-14*

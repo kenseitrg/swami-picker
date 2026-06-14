@@ -13,7 +13,11 @@ from src.evaluation.visualize_picking import (
     plot_curve_overlays,
     plot_error_distribution,
     plot_column_error_heatmap,
+    plot_inference_curve_grid,
     plot_probability_heatmap_overlay,
+    plot_quality_distributions,
+    plot_quality_ranking,
+    plot_quality_scatter,
     plot_training_curves,
     torch_softmax,
 )
@@ -157,6 +161,85 @@ def test_plot_column_error_heatmap_creates_file(sample_data, tmp_path: Path):
     save_path = tmp_path / "error_overlay.png"
     plot_column_error_heatmap(
         spectra, true_picks, pred_picks, save_path=save_path, seed=3
+    )
+    assert save_path.exists()
+    assert save_path.stat().st_size > 0
+
+
+def test_plot_inference_curve_grid_creates_file(sample_data, tmp_path: Path):
+    """Inference curve grid figure is written to disk without ground truth."""
+    spectra, _, pred_picks, _, presence_probs, _ = sample_data
+    save_path = tmp_path / "inference_grid.png"
+    metadata = [
+        {"spectrum_id": f"spec_{i}", "freq_axis_resized": np.linspace(0, 10, 256)}
+        for i in range(spectra.shape[0])
+    ]
+    for meta in metadata:
+        meta["waven_axis_resized"] = np.linspace(0, 0.08, 256)
+    plot_inference_curve_grid(
+        spectra,
+        pred_picks,
+        presence_probs,
+        metadata=metadata,
+        num_samples=4,
+        save_path=save_path,
+        seed=4,
+    )
+    assert save_path.exists()
+    assert save_path.stat().st_size > 0
+
+
+def test_plot_quality_distributions_creates_file(tmp_path: Path):
+    """Quality metric distribution figure is written to disk."""
+    rng = np.random.default_rng(5)
+    quality_scores = [
+        {
+            "spectrum_id": f"spec_{i}",
+            "coverage": float(rng.random()),
+            "mean_certainty": float(rng.random()),
+            "smoothness": float(rng.random()),
+            "monotonicity": float(rng.random()),
+            "composite_score": float(rng.random()),
+        }
+        for i in range(50)
+    ]
+    save_path = tmp_path / "quality_distributions.png"
+    plot_quality_distributions(quality_scores, save_path=save_path)
+    assert save_path.exists()
+    assert save_path.stat().st_size > 0
+
+
+def test_plot_quality_scatter_creates_file(tmp_path: Path):
+    """Quality scatter figure is written to disk."""
+    rng = np.random.default_rng(6)
+    quality_scores = [
+        {
+            "spectrum_id": f"spec_{i}",
+            "mean_certainty": float(rng.random()),
+            "smoothness": float(rng.random()),
+            "composite_score": float(rng.random()),
+        }
+        for i in range(30)
+    ]
+    save_path = tmp_path / "quality_scatter.png"
+    plot_quality_scatter(quality_scores, save_path=save_path)
+    assert save_path.exists()
+    assert save_path.stat().st_size > 0
+
+
+def test_plot_quality_ranking_creates_file(tmp_path: Path):
+    """Quality ranking bar chart is written to disk."""
+    quality_scores = [
+        {"spectrum_id": f"spec_{i}", "composite_score": float(i) / 20.0}
+        for i in range(20)
+    ]
+    save_path = tmp_path / "quality_ranking.png"
+    plot_quality_ranking(
+        quality_scores,
+        metric="composite_score",
+        top_n=5,
+        bottom_n=5,
+        save_path=save_path,
     )
     assert save_path.exists()
     assert save_path.stat().st_size > 0
