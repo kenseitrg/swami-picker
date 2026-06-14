@@ -561,6 +561,7 @@ def compute_spectrum_quality_score(
     smoothness_weight: float = 0.25,
     monotonicity_weight: float = 0.15,
     smoothness_threshold: float = 1.0,
+    quality_threshold: float | None = None,
 ) -> dict[str, float]:
     """Compute scalar quality metrics for an inferred dispersion curve.
 
@@ -588,11 +589,17 @@ def compute_spectrum_quality_score(
             smooth if its second difference is within one bin of the local
             trend.  This penalizes mode jumps and spikes but allows gradual
             trends and steep monotonic tails.
+        quality_threshold: Optional scalar threshold on ``composite_score``.
+            When provided, the returned dictionary includes a
+            ``needs_review`` boolean-like float (1.0 if composite is below the
+            threshold, else 0.0).  Per-spectrum thresholds are usually better
+            than a global value; see ``needs_review_from_batch``.
 
     Returns:
         Dictionary with ``coverage``, ``mean_certainty``, ``smoothness``,
-        ``monotonicity``, ``uncertainty_penalty``, and ``composite_score``
-        (higher is better, range roughly ``[0, 1]``).
+        ``monotonicity``, ``uncertainty_penalty``, ``composite_score``
+        (higher is better, range roughly ``[0, 1]``), and optionally
+        ``needs_review``.
 
     Raises:
         ValueError: If any weight is negative.
@@ -701,7 +708,7 @@ def compute_spectrum_quality_score(
         + monotonicity_weight * monotonicity
     ) / (total_weight + 1e-8)
 
-    return {
+    result: dict[str, float] = {
         "coverage": coverage,
         "mean_certainty": mean_certainty,
         "effective_certainty": effective_certainty,
@@ -710,6 +717,83 @@ def compute_spectrum_quality_score(
         "monotonicity": monotonicity,
         "composite_score": composite,
     }
+    if quality_threshold is not None:
+        result["needs_review"] = 1.0 if composite < quality_threshold else 0.0
+    return result
+
+
+def needs_review_from_batch(
+    quality_scores: list[dict[str, Any]],
+    *,
+    composite_percentile: float = 10.0,
+    coverage_percentile: float = 5.0,
+    smoothness_percentile: float = 10.0,
+) -> tuple[list[str], dict[str, float]]:
+    """Select spectra for manual review using percentile-based guards.
+
+    A spectrum is flagged for review if any of the following hold:
+
+    * Its ``composite_score`` is below the ``composite_percentile``
+      percentile of the batch.
+    * Its ``coverage`` is below the ``coverage_percentile`` percentile.
+    * Its ``smoothness`` is below the ``smoothness_percentile`` percentile.
+
+    Percentiles are data-adaptive and reflect the current model/dataset
+    behavior rather than hard-coded physical constants.  They are intended
+    as a triage heuristic, not an automatic accept/reject gate.
+
+    Args:
+        quality_scores: Per-spectrum records produced by
+            ``compute_spectrum_quality_score``.
+        composite_percentile: Percentile threshold for composite score.
+        coverage_percentile: Percentile threshold for coverage.
+        smoothness_percentile: Percentile threshold for smoothness.
+
+    Returns:
+        Tuple of ``(spectrum_ids_for_review, threshold_dict)``.  The
+        threshold dictionary contains the computed ``composite_threshold``,
+        ``coverage_threshold``, and ``smoothness_threshold`` so the run is
+        reproducible.
+    """
+    if not quality_scores:
+        return [], {}
+
+    composite_values = np.array(
+        [float(s["composite_score"]) for s in quality_scores], dtype=np.float64
+    )
+    coverage_values = np.array(
+        [float(s["coverage"]) for s in quality_scores], dtype=np.float64
+    )
+    smoothness_values = np.array(
+        [float(s["smoothness"]) for s in quality_scores], dtype=np.float64
+    )
+
+    composite_threshold = float(np.percentile(composite_values, composite_percentile))
+    coverage_threshold = float(np.percentile(coverage_values, coverage_percentile))
+    smoothness_threshold = float(
+        np.percentile(smoothness_values, smoothness_percentile)
+    )
+
+    review_ids: list[str] = []
+    for score in quality_scores:
+        if (
+            score["composite_score"] < composite_threshold
+            or score["coverage"] < coverage_threshold
+            or score["smoothness"] < smoothness_threshold
+        ):
+            review_ids.append(str(score["spectrum_id"]))
+
+    thresholds = {
+        "composite_threshold": composite_threshold,
+        "coverage_threshold": coverage_threshold,
+        "smoothness_threshold": smoothness_threshold,
+        "composite_percentile": composite_percentile,
+        "coverage_percentile": coverage_percentile,
+        "smoothness_percentile": smoothness_percentile,
+        "flagged_count": len(review_ids),
+        "total_count": len(quality_scores),
+    }
+    return review_ids, thresholds
 
 
 def dispersion_curve_to_dataframe(

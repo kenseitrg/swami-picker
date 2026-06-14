@@ -35,6 +35,7 @@
 | **Sequence head (default)** | **BiLSTM over the frequency axis** (`SeqPickingModel`) | The U-Net decoder output is reshaped to `(B, C*H, W)` and processed by a 2-layer BiLSTM (`seq_hidden_dim=128`) with a residual skip. This gives the model explicit frequency-axis context and is the current default after `phase4-picking-seq-bilstm-v1`. |
 | **Multi-mode head** | Optional `MultiModePickingModel` | Predicts `num_modes` parallel 257-class sequences and selects the smoothest path at inference. Kept as an experimental alternative, but the current best-alignment loss suffers from assignment degeneracy, so it is **not** the default. |
 | **Regularization experiments** | Label smoothing + higher weight decay tested, then reverted | `phase4-picking-seq-reg-v1` (`label_smoothing=0.1`, `weight_decay=0.10`) slightly improved val RMSE but did not reduce presence overfit. `phase4-picking-seq-reg-coverage-v1` (`absent_class_weight=0.8`) introduced visible mode jumps; the baseline BiLSTM hyperparameters are retained as default. |
+| **Manual review triage** | Percentile-based quality guards | Implemented in `needs_review_from_batch()`. Default flags spectra in the bottom 5% of composite score, bottom 5% of coverage, or bottom 5% of smoothness. On BiLSTM inference this flags ~129/1,392 spectra (~9.3%) for expert review. The old hard-coded `--quality-threshold` is deprecated but still supported. |
 | **Cluster conditioning** | ❌ **Removed** for v2 | Single-head model makes cluster conditioning harder to integrate; revisit only if needed. |
 | **Augmentation** | **Pick-synchronized** transforms only | `FreqShift` and `WavenShift` move both image and picks consistently; intensity jitter and Gaussian noise leave picks unchanged. |
 | **Validation split** | **K-fold cross-validation** (`k_folds=5`) + stratified by cluster label | Larger, more robust validation sets (~38 spectra) instead of a single tiny 10% hold-out. |
@@ -444,6 +445,11 @@ Run these sequentially (each ~30–60 min on RTX 3060):
 | `phase4-picking-seq-reg-v1` | `configs/phase4_picking_seq_regularized.yaml` | U-Net + BiLSTM | noise + intensity + label smoothing 0.1 + weight decay 0.10 | Slightly better RMSE, same presence overfit |
 | `phase4-picking-seq-reg-coverage-v1` | `configs/phase4_picking_seq_reg_coverage.yaml` | U-Net + BiLSTM | as reg-v1 + `absent_class_weight=0.8` | Worse: visible mode jumps; not promoted |
 | `phase4-picking-v2-singlehead` | `configs/phase4_picking.yaml` (model_type=`picking`) | Single 257-class head, base=16, embed=64, dropout=0.5 | noise + intensity | Previous v2.1 default; kept for reference |
+
+Manual review triage defaults (see `scripts/phase4_picking/run_inference.py`):
+- `--review-composite-percentile 5`
+- `--review-coverage-percentile 5`
+- `--review-smoothness-percentile 5`
 | `phase4-picking-v2-shifts` | `configs/phase4_picking_shifts.yaml` | Single 257-class head | Shifts disabled (shift aug hurt metrics on the small dataset) | Kept for reference |
 | `phase4-picking-multimode-v1` | `configs/phase4_picking_multimode.yaml` | Multi-mode head | noise + intensity | Experimental; assignment degeneracy prevents convergence |
 
@@ -462,6 +468,7 @@ Before declaring Phase 4 complete:
 |-------|--------|---------------|
 | Training stability | Val loss decreases, no NaN/Inf | `metrics.jsonl` |
 | Picking RMSE (model space) | < 2 pixels on valid columns | Smoothed `val_rmse_pixels` (BiLSTM default reaches ~1.94 px) |
+| Manual review queue | ~5–10% of spectra flagged | `low_quality_spectra.json` from percentile-based triage |
 | Presence/absence F1 | > 0.85 | `val_presence_f1` |
 | Coverage | Predicted coverage within 10% of true coverage | `val_coverage` |
 | Overfitting gap | `train_rmse - val_rmse` < 2 pixels | Loss curves |

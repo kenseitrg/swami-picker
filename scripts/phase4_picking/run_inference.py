@@ -23,6 +23,7 @@ from src.transforms.coordinates import (
     compute_spectrum_quality_score,
     inference_to_annotation_record,
     model_indices_to_physical,
+    needs_review_from_batch,
 )
 from src.utils.config import PickingConfig
 from src.utils.device import get_device
@@ -160,7 +161,10 @@ def _save_quality_report(
     picks: np.ndarray,
     presence_probs: np.ndarray,
     metadatas: Sequence[dict[str, Any]],
-    quality_threshold: float,
+    quality_threshold: float | None,
+    review_composite_percentile: float = 10.0,
+    review_coverage_percentile: float = 5.0,
+    review_smoothness_percentile: float = 10.0,
 ) -> tuple[Path, Path]:
     """Save quality scores and a list of low-quality spectra for re-annotation.
 
@@ -195,8 +199,26 @@ def _save_quality_report(
             **score,
         }
         quality_scores.append(record)
-        if score["composite_score"] < quality_threshold:
-            low_quality_ids.append(spectrum_id)
+
+    # Use percentile-based triage; legacy threshold is ignored unless explicitly set.
+    if quality_threshold is not None:
+        low_quality_ids = [
+            spectrum_ids[idx]
+            for idx, score in enumerate(quality_scores)
+            if score["composite_score"] < quality_threshold
+        ]
+    else:
+        low_quality_ids, thresholds = needs_review_from_batch(
+            [
+                {"spectrum_id": sid, **score}
+                for sid, score in zip(spectrum_ids, quality_scores)
+            ],
+            composite_percentile=review_composite_percentile,
+            coverage_percentile=review_coverage_percentile,
+            smoothness_percentile=review_smoothness_percentile,
+        )
+        for key, value in thresholds.items():
+            logger.info("Review threshold %s: %s", key, value)
 
     report_path = output_dir / "quality_scores.json"
     with open(report_path, "w") as fh:
@@ -205,19 +227,18 @@ def _save_quality_report(
 
     low_quality_path = output_dir / "low_quality_spectra.json"
     with open(low_quality_path, "w") as fh:
-        json.dump(
-            {
-                "threshold": quality_threshold,
-                "count": len(low_quality_ids),
-                "spectrum_ids": low_quality_ids,
-            },
-            fh,
-            indent=2,
-        )
+        report: dict[str, Any] = {
+            "count": len(low_quality_ids),
+            "spectrum_ids": low_quality_ids,
+        }
+        if quality_threshold is not None:
+            report["threshold"] = quality_threshold
+        else:
+            report["thresholds"] = thresholds
+        json.dump(report, fh, indent=2)
     logger.info(
-        "Flagged %d spectra with composite_score < %.3f for manual review",
+        "Flagged %d spectra for manual review",
         len(low_quality_ids),
-        quality_threshold,
     )
     return report_path, low_quality_path
 
@@ -313,8 +334,26 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument(
         "--quality-threshold",
         type=float,
-        default=0.5,
-        help="Composite score threshold below which spectra are flagged for review.",
+        default=None,
+        help="Deprecated. Use --review-composite-percentile instead.",
+    )
+    parser.add_argument(
+        "--review-composite-percentile",
+        type=float,
+        default=5.0,
+        help="Flag spectra with composite score below this percentile (default: 5).",
+    )
+    parser.add_argument(
+        "--review-coverage-percentile",
+        type=float,
+        default=5.0,
+        help="Flag spectra with coverage below this percentile (default: 5).",
+    )
+    parser.add_argument(
+        "--review-smoothness-percentile",
+        type=float,
+        default=5.0,
+        help="Flag spectra with smoothness below this percentile (default: 5).",
     )
     parser.add_argument(
         "--confidence-threshold",
@@ -431,6 +470,9 @@ def main(argv: list[str] | None = None) -> int:
         presence_probs=probs_arr,
         metadatas=all_metadatas,
         quality_threshold=args.quality_threshold,
+        review_composite_percentile=args.review_composite_percentile,
+        review_coverage_percentile=args.review_coverage_percentile,
+        review_smoothness_percentile=args.review_smoothness_percentile,
     )
 
     if args.export_annotations:
