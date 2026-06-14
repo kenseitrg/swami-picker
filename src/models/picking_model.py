@@ -9,9 +9,10 @@ a separate head.
 
 Several architectures are available:
 
-* :class:`PickingModel` — compact U-Net with a 1-D conv classifier.
 * :class:`SeqPickingModel` — U-Net followed by a BiLSTM or 1-D CNN over
-  the frequency axis.
+  the frequency axis. This is the current default architecture.
+* :class:`PickingModel` — compact U-Net with a 1-D conv classifier
+  (previous default).
 * :class:`MultiModePickingModel` — predicts logits for multiple
   dispersion modes (fundamental + overtones) and selects the most
   likely fundamental-mode path during inference.
@@ -461,7 +462,7 @@ def build_picking_model(config) -> nn.Module:
     Returns:
         An uninitialized picking model.
     """
-    model_type = getattr(config, "model_type", "picking")
+    model_type = getattr(config, "model_type", "seq")
 
     if model_type == "picking":
         return PickingModel(

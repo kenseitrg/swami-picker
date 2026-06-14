@@ -69,7 +69,7 @@ class PickingTrainer:
         argv: list[str] | None = None,
     ) -> None:
         """Initialize the trainer."""
-        self.model_type = getattr(config, "model_type", "picking")
+        self.model_type = getattr(config, "model_type", "seq")
         self.model = model.to(device)
         self.config = config
         self.device = device
@@ -84,6 +84,8 @@ class PickingTrainer:
             direct_pick_weight=config.direct_pick_weight,
             smooth_weight=getattr(config, "loss_smooth_weight", 0.0),
             monotonic_weight=getattr(config, "loss_monotonic_weight", 0.0),
+            label_smoothing=getattr(config, "label_smoothing", 0.0),
+            absent_class_weight=getattr(config, "absent_class_weight", 1.0),
         )
 
         self.optimizer = self._setup_optimizer()

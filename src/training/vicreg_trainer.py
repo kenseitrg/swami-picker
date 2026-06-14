@@ -436,14 +436,14 @@ class VICRegTrainer:
 
         if is_target or is_final:
             plot_fk_umap(
-                self.model,
+                self.model,  # type: ignore
                 self.val_loader,
                 self.device,
                 plot_dir / f"umap_epoch_{epoch + 1:03d}.png",
                 seed=self.config.seed,
             )
             plot_fk_similarity_matrix(
-                self.model,
+                self.model,  # type: ignore
                 self.val_loader,
                 self.device,
                 plot_dir / f"similarity_matrix_epoch_{epoch + 1:03d}.png",

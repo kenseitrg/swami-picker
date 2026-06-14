@@ -389,16 +389,21 @@ class PickingConfig:
     fold_index: int = 0  # which fold to use as validation when k_folds > 1
 
     # Model
-    model_type: str = "picking"  # "picking" | "seq" | "multimode"
-    base_channels: int = 8
+    # Default: sequence model with a BiLSTM over the frequency axis. This is
+    # the current best architecture (phase4-picking-seq-bilstm-v1).
+    model_type: str = "seq"  # "picking" | "seq" | "multimode"
+    base_channels: int = 16
     embed_dim: int = 64
     spectrum_height: int = 256  # must match model input height (wavenumber bins)
-    dropout: float = 0.3  # dropout inside conv blocks
+    dropout: float = 0.5  # dropout inside conv blocks
 
     # Sequence model (used when model_type == "seq")
     seq_hidden_dim: int = 128
     seq_layers: int = 2
     seq_type: str = "bilstm"  # "bilstm" | "conv1d"
+
+    # U-Net depth: 2 or 3 downsample stages
+    num_downsample: int = 2
 
     # Multi-mode model (used when model_type == "multimode")
     num_modes: int = 3
@@ -427,6 +432,8 @@ class PickingConfig:
     direct_pick_weight: float = 2.0
     loss_smooth_weight: float = 0.0  # weight for frequency-axis smoothness loss
     loss_monotonic_weight: float = 0.0  # weight for soft monotonicity loss
+    label_smoothing: float = 0.0  # cross-entropy label smoothing
+    absent_class_weight: float = 1.0  # relative weight for "no pick" class
     min_val_coverage: float = 0.05  # minimum predicted val coverage for best checkpoint
     early_stopping_patience: int = 15
     smooth_window: int = 5  # epochs for moving-average val metric smoothing

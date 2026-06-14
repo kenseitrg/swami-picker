@@ -58,10 +58,17 @@ def test_present_class_kept():
 
 
 def test_build_picking_model():
-    """Factory builds the picking model."""
-    config = PickingConfig(spectrum_height=256)
+    """Factory builds the single-head picking model."""
+    config = PickingConfig(model_type="picking", spectrum_height=256)
     model = build_picking_model(config)
     assert isinstance(model, PickingModel)
+
+
+def test_build_default_picking_model_is_seq():
+    """The factory default is now the sequence (BiLSTM) model."""
+    config = PickingConfig(spectrum_height=256)
+    model = build_picking_model(config)
+    assert isinstance(model, SeqPickingModel)
 
 
 def test_build_seq_picking_model():

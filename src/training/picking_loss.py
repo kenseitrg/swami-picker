@@ -24,6 +24,8 @@ class PickingLoss(nn.Module):
         direct_pick_weight: float = 2.0,
         smooth_weight: float = 0.0,
         monotonic_weight: float = 0.0,
+        label_smoothing: float = 0.0,
+        absent_class_weight: float = 1.0,
         absent_class: int | None = None,
     ) -> None:
         """Initialize the loss.
@@ -36,6 +38,12 @@ class PickingLoss(nn.Module):
                 Set to ``0.0`` to disable.
             monotonic_weight: Weight for the soft monotonicity term.  Set
                 to ``0.0`` to disable.
+            label_smoothing: Label-smoothing factor for cross-entropy.
+                Values in ``[0.0, 1.0]``; ``0.0`` disables smoothing.
+            absent_class_weight: Relative weight for the "no pick" class
+                in cross-entropy.  Values ``> 1.0`` penalize false
+                positives more strongly; values ``< 1.0`` encourage
+                higher coverage.
             absent_class: Index of the "no pick" class.  Defaults to the
                 last class.
         """
@@ -44,6 +52,8 @@ class PickingLoss(nn.Module):
         self.direct_pick_weight = direct_pick_weight
         self.smooth_weight = smooth_weight
         self.monotonic_weight = monotonic_weight
+        self.label_smoothing = label_smoothing
+        self.absent_class_weight = absent_class_weight
         self.absent_class = absent_class
 
     def forward(
@@ -77,10 +87,19 @@ class PickingLoss(nn.Module):
         target[target < 0] = self.absent_class
         target = target.long()
 
+        # Class weights: up/down-weight the "no pick" class.
+        num_classes = logits.shape[1] if logits.dim() == 3 else logits.shape[2]
+        class_weights = torch.ones(num_classes, device=logits.device)
+        class_weights[self.absent_class] = self.absent_class_weight
+
         if logits.dim() == 3:
-            pick_loss = self._single_head_loss(logits, target, direct_mask)
+            pick_loss = self._single_head_loss(
+                logits, target, direct_mask, class_weights
+            )
         else:
-            pick_loss = self._multi_mode_loss(logits, target, direct_mask)
+            pick_loss = self._multi_mode_loss(
+                logits, target, direct_mask, class_weights
+            )
 
         total_loss = self.pick_weight * pick_loss
         loss_dict: dict[str, torch.Tensor] = {"pick_loss": pick_loss.detach()}
@@ -107,9 +126,16 @@ class PickingLoss(nn.Module):
         logits: torch.Tensor,
         target: torch.Tensor,
         direct_mask: torch.Tensor,
+        class_weights: torch.Tensor | None = None,
     ) -> torch.Tensor:
         """Cross-entropy for a single classification head."""
-        ce = F.cross_entropy(logits, target, reduction="none")
+        ce = F.cross_entropy(
+            logits,
+            target,
+            weight=class_weights,
+            reduction="none",
+            label_smoothing=self.label_smoothing,
+        )
         weights = torch.where(direct_mask, self.direct_pick_weight, 1.0)
         ce = ce * weights
         normalizer = weights.sum() + 1e-6
@@ -120,6 +146,7 @@ class PickingLoss(nn.Module):
         logits: torch.Tensor,
         target: torch.Tensor,
         direct_mask: torch.Tensor,
+        class_weights: torch.Tensor | None = None,
     ) -> torch.Tensor:
         """Cross-entropy for multi-mode head using best-alignment.
 
@@ -138,7 +165,13 @@ class PickingLoss(nn.Module):
             .expand(-1, num_modes, -1)
             .reshape(batch_size * num_modes, width)
         )
-        ce_flat = F.cross_entropy(logits_flat, target_flat, reduction="none")
+        ce_flat = F.cross_entropy(
+            logits_flat,
+            target_flat,
+            weight=class_weights,
+            reduction="none",
+            label_smoothing=self.label_smoothing,
+        )
         ce = ce_flat.reshape(batch_size, num_modes, width)
 
         # Direct-pick weights (B, W) -> (B, 1, W).

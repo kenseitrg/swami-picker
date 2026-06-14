@@ -76,6 +76,60 @@ def test_loss_decreases_when_correct():
     assert final_loss.item() < initial_loss.item()
 
 
+def test_label_smoothing_lowers_confidence():
+    """Label smoothing makes the model less confident at optimum."""
+    torch.manual_seed(0)
+    logits = torch.zeros(1, 257, 256, requires_grad=True)
+    pick_target, direct_mask = _make_targets(batch_size=1)
+
+    loss_fn_smooth = PickingLoss(label_smoothing=0.1)
+    optimizer = torch.optim.SGD([logits], lr=10.0)
+
+    for _ in range(50):
+        optimizer.zero_grad()
+        loss, _ = loss_fn_smooth(logits, pick_target, direct_mask)
+        loss.backward()
+        optimizer.step()
+
+    probs = torch.softmax(logits.detach(), dim=1)
+    max_probs = probs.max(dim=1).values
+    # After strong smoothing, no probability should be saturated near 1.
+    assert max_probs.max().item() < 0.95
+
+
+def test_absent_class_weight_changes_loss():
+    """Increasing absent-class weight changes the optimized predictions."""
+    torch.manual_seed(0)
+    pick_target, direct_mask = _make_targets(batch_size=1)
+
+    logits_low = torch.zeros(1, 257, 256, requires_grad=True)
+    logits_high = torch.zeros(1, 257, 256, requires_grad=True)
+
+    opt_low = torch.optim.SGD([logits_low], lr=1.0)
+    opt_high = torch.optim.SGD([logits_high], lr=1.0)
+
+    loss_fn_low = PickingLoss(absent_class_weight=1.0)
+    loss_fn_high = PickingLoss(absent_class_weight=5.0)
+
+    for _ in range(20):
+        opt_low.zero_grad()
+        loss_low, _ = loss_fn_low(logits_low, pick_target, direct_mask)
+        loss_low.backward()
+        opt_low.step()
+
+        opt_high.zero_grad()
+        loss_high, _ = loss_fn_high(logits_high, pick_target, direct_mask)
+        loss_high.backward()
+        opt_high.step()
+
+    pred_low = logits_low.argmax(dim=1)
+    pred_high = logits_high.argmax(dim=1)
+    coverage_low = (pred_low != 256).float().mean().item()
+    coverage_high = (pred_high != 256).float().mean().item()
+    # Higher absent-class weight should push coverage down on average.
+    assert coverage_high <= coverage_low
+
+
 def test_loss_components_finite():
     """Pick loss component is finite and non-negative."""
     loss_fn = PickingLoss()

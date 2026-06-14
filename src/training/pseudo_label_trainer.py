@@ -82,7 +82,8 @@ class PseudoLabelTrainer:
             class_weights: Optional per-class weight tensor for ``CrossEntropyLoss``.
                 If provided, sent to *device* automatically.
         """
-        self.model = model.to(device)
+        model.to(device)
+        self.model = model
         self.config = config
         self.device = device
         self.train_loader = train_loader
@@ -345,7 +346,7 @@ class PseudoLabelTrainer:
 
             # Collect penultimate-layer embeddings for silhouette analysis
             if hasattr(self.model, "extract_embedding"):
-                emb = self.model.extract_embedding(x)
+                emb = self.model.extract_embedding(x)  # type: ignore
                 all_embeddings.append(emb.cpu().numpy())
                 all_labels.append(y.cpu().numpy())
 

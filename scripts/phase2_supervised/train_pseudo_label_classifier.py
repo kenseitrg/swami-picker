@@ -53,8 +53,8 @@ class FeatureDataset(Dataset):
     def __len__(self) -> int:
         return len(self.features)
 
-    def __getitem__(self, idx: int) -> tuple[torch.Tensor, torch.Tensor]:
-        return self.features[idx], self.labels[idx]
+    def __getitem__(self, index: int) -> tuple[torch.Tensor, torch.Tensor]:
+        return self.features[index], self.labels[index]
 
 
 class SpectrumDataset(Dataset):
@@ -75,8 +75,8 @@ class SpectrumDataset(Dataset):
     def __len__(self) -> int:
         return len(self.spectrum_ids)
 
-    def __getitem__(self, idx: int) -> tuple[torch.Tensor, torch.Tensor]:
-        sid = self.spectrum_ids[idx]
+    def __getitem__(self, index: int) -> tuple[torch.Tensor, torch.Tensor]:
+        sid = self.spectrum_ids[index]
         npz_path = self.processed_dir / f"{sid}.npz"
         data = np.load(npz_path)
         try:

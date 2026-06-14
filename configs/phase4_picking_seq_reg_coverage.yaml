@@ -1,6 +1,6 @@
-# Phase 4: Supervised dispersion-curve picking.
-# Default architecture: U-Net + BiLSTM over the frequency axis.
-# 5-fold cross-validation, fold 0 as validation.
+# Phase 4: BiLSTM picking with stronger regularization and reduced absent-class weight.
+# Result: introduced visible mode jumps in validation curve overlays. Reverted;
+# baseline BiLSTM hyperparameters retained as default.
 
 # Data
 training_data_path: "data/processed/phase4_training_data.npz"
@@ -11,9 +11,6 @@ k_folds: 5
 fold_index: 0
 
 # Model
-# Default architecture (v3.0): U-Net encoder/decoder + BiLSTM sequence head
-# over frequency. This is the current best architecture and is documented as
-# the new default after the phase4-picking-seq-bilstm-v1 experiment.
 model_type: "seq"
 base_channels: 16
 embed_dim: 64
@@ -36,13 +33,16 @@ batch_size: 16
 accum_steps: 1
 epochs: 100
 lr: 1.0e-3
-weight_decay: 0.05
+weight_decay: 0.10
 betas: [0.9, 0.95]
 warmup_ratio: 0.1
 grad_clip_norm: 1.0
 loss_pick_weight: 1.0
 direct_pick_weight: 2.0
 loss_smooth_weight: 0.05
+loss_monotonic_weight: 0.0
+label_smoothing: 0.1
+absent_class_weight: 0.8
 min_val_coverage: 0.05
 early_stopping_patience: 15
 smooth_window: 5

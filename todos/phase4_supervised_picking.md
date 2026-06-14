@@ -1,6 +1,6 @@
 # Phase 4: Supervised Fine-Tuning & Dispersion Curve Picking — TODO
 
-> **Status:** Implementation complete — final v2.1 model trained and validated. Best val RMSE=3.46 px, smoothed=3.77 px, val F1=0.934, no mode jumps. Full-dataset inference completed on all 1,392 spectra.  
+> **Status:** Implementation complete — **BiLSTM sequence model is now the default**. `phase4-picking-seq-bilstm-v1` reached val RMSE≈1.94 px and val F1≈0.93, improving on the previous v2.1 single-head default (val RMSE=3.46 px, F1=0.934). The older single-head architecture and the multi-mode experiment are kept as alternatives but are no longer the default. Full-dataset inference completed on all 1,392 spectra.  
 > **Depends on:** Phase 3 (✅ annotations collected)  
 > **Goal:** Train a supervised model that predicts a dense `(256,)` dispersion-curve pick from a raw `(1, 256, 256)` FK spectrum.  
 > **Tests:** 33 coordinate-transform tests + 11 FK dataset tests passing; full Phase 4 suite passing.
@@ -32,6 +32,9 @@
 | **Input** | Raw preprocessed spectrum `(1, 256, 256)` | Spatial relationships between frequency and wavenumber must be preserved. |
 | **Output representation** | **Single 257-class head** `(B, 257, W)`: 256 wavenumber bins + 1 explicit "no pick" class | Removes separate presence head, preventing the model from being too conservative by hiding behind a presence gate. Every column must choose a wavenumber or absence. |
 | **Backbone** | Compact U-Net with skip connections (`PickingModel`) | `base_channels=16`, `embed_dim=64`, ~2.3M params. Larger capacity than the initial v2 refactor because the small dataset still needs enough model capacity to capture multi-mode context; strong dropout (`0.5`) controls overfitting. |
+| **Sequence head (default)** | **BiLSTM over the frequency axis** (`SeqPickingModel`) | The U-Net decoder output is reshaped to `(B, C*H, W)` and processed by a 2-layer BiLSTM (`seq_hidden_dim=128`) with a residual skip. This gives the model explicit frequency-axis context and is the current default after `phase4-picking-seq-bilstm-v1`. |
+| **Multi-mode head** | Optional `MultiModePickingModel` | Predicts `num_modes` parallel 257-class sequences and selects the smoothest path at inference. Kept as an experimental alternative, but the current best-alignment loss suffers from assignment degeneracy, so it is **not** the default. |
+| **Regularization experiments** | Label smoothing + higher weight decay tested, then reverted | `phase4-picking-seq-reg-v1` (`label_smoothing=0.1`, `weight_decay=0.10`) slightly improved val RMSE but did not reduce presence overfit. `phase4-picking-seq-reg-coverage-v1` (`absent_class_weight=0.8`) introduced visible mode jumps; the baseline BiLSTM hyperparameters are retained as default. |
 | **Cluster conditioning** | ❌ **Removed** for v2 | Single-head model makes cluster conditioning harder to integrate; revisit only if needed. |
 | **Augmentation** | **Pick-synchronized** transforms only | `FreqShift` and `WavenShift` move both image and picks consistently; intensity jitter and Gaussian noise leave picks unchanged. |
 | **Validation split** | **K-fold cross-validation** (`k_folds=5`) + stratified by cluster label | Larger, more robust validation sets (~38 spectra) instead of a single tiny 10% hold-out. |
@@ -68,10 +71,15 @@ Implemented. Locked fields after reviewer feedback:
 - `fold_index: int = 0` — which fold to use as validation
 
 **Model**
+- `model_type: str = "seq"` — default architecture: U-Net + BiLSTM over frequency
 - `base_channels: int = 16`
 - `embed_dim: int = 64`
 - `spectrum_height: int = 256` — wavenumber bins (must match input height)
 - `dropout: float = 0.5`
+- `seq_hidden_dim: int = 128`
+- `seq_layers: int = 2`
+- `seq_type: str = "bilstm"`
+- `num_downsample: int = 2`
 
 **Augmentation (pick-synchronized)**
 - `aug_enabled: bool = True`
@@ -432,8 +440,12 @@ Run these sequentially (each ~30–60 min on RTX 3060):
 
 | Run | Config | Model | Augmentation | Notes |
 |-----|--------|-------|--------------|-------|
-| `phase4-picking-v2-singlehead` | `configs/phase4_picking.yaml` | Single 257-class head, base=16, embed=64, dropout=0.5 | noise + intensity | Final v2.1 architecture |
-| `phase4-picking-v2-shifts` | `configs/phase4_picking_shifts.yaml` | Same as above | Shifts disabled (shift aug hurt metrics on the small dataset) | Kept for reference |
+| `phase4-picking-seq-bilstm-v1` | `configs/phase4_picking.yaml` | **U-Net + BiLSTM (default)**, base=16, embed=64, dropout=0.5 | noise + intensity | New default; val RMSE≈1.94 px, F1≈0.93 |
+| `phase4-picking-seq-reg-v1` | `configs/phase4_picking_seq_regularized.yaml` | U-Net + BiLSTM | noise + intensity + label smoothing 0.1 + weight decay 0.10 | Slightly better RMSE, same presence overfit |
+| `phase4-picking-seq-reg-coverage-v1` | `configs/phase4_picking_seq_reg_coverage.yaml` | U-Net + BiLSTM | as reg-v1 + `absent_class_weight=0.8` | Worse: visible mode jumps; not promoted |
+| `phase4-picking-v2-singlehead` | `configs/phase4_picking.yaml` (model_type=`picking`) | Single 257-class head, base=16, embed=64, dropout=0.5 | noise + intensity | Previous v2.1 default; kept for reference |
+| `phase4-picking-v2-shifts` | `configs/phase4_picking_shifts.yaml` | Single 257-class head | Shifts disabled (shift aug hurt metrics on the small dataset) | Kept for reference |
+| `phase4-picking-multimode-v1` | `configs/phase4_picking_multimode.yaml` | Multi-mode head | noise + intensity | Experimental; assignment degeneracy prevents convergence |
 
 For each run, append to `experiments/MODEL_CHANGELOG.md` with:
 - `model_version`
@@ -449,7 +461,7 @@ Before declaring Phase 4 complete:
 | Check | Target | How to Verify |
 |-------|--------|---------------|
 | Training stability | Val loss decreases, no NaN/Inf | `metrics.jsonl` |
-| Picking RMSE (model space) | < 3 pixels on valid columns | Smoothed `val_rmse_pixels` |
+| Picking RMSE (model space) | < 2 pixels on valid columns | Smoothed `val_rmse_pixels` (BiLSTM default reaches ~1.94 px) |
 | Presence/absence F1 | > 0.85 | `val_presence_f1` |
 | Coverage | Predicted coverage within 10% of true coverage | `val_coverage` |
 | Overfitting gap | `train_rmse - val_rmse` < 2 pixels | Loss curves |
@@ -504,10 +516,11 @@ Append to `experiments/MODEL_CHANGELOG.md` before the first run:
 ```
 | 2026-06-12 | phase4-picking-v1 | Phase 4 core library implemented. U-Net picking model on 188 annotated spectra. Two heads: 256-class wavenumber logits + presence logit. Pick-synchronized augmentation. Visualizations: curve overlays, probability heatmaps, certainty distributions. | N/A | N/A | N/A |
 | 2026-06-13 | phase4-picking-v2 | Refactored to single 257-class head (256 bins + absent class). Compact U-Net: base_channels=8, embed_dim=64, dropout=0.3 (~0.59M params). K-fold CV (5 folds). Smoothed val RMSE checkpoint selection. Grayscale probability heatmaps. | N/A | N/A | N/A |
-| 2026-06-13 | phase4-picking-v2.1 | Final architecture: base_channels=16, embed_dim=64, dropout=0.5 (~2.3M params). Added expected-value frequency-axis smoothness loss (weight=0.05). Disabled pick-synchronized shifts; kept noise + intensity jitter. Coverage safeguard on checkpoint selection. | N/A | N/A | N/A |
+| 2026-06-13 | phase4-picking-v2.1 | Final single-head architecture: base_channels=16, embed_dim=64, dropout=0.5 (~2.3M params). Added expected-value frequency-axis smoothness loss (weight=0.05). Disabled pick-synchronized shifts; kept noise + intensity jitter. Coverage safeguard on checkpoint selection. Run `phase4-picking-v2-final`: best val RMSE=3.46 px, smoothed=3.77 px, F1=0.934. | N/A | N/A | N/A |
+| 2026-06-14 | phase4-picking-seq-bilstm-v1 | **New default.** Added `SeqPickingModel`: U-Net decoder output reshaped to `(B, C*H, W)` and processed by a 2-layer BiLSTM (`seq_hidden_dim=128`) with residual skip. `configs/phase4_picking.yaml` and `PickingConfig` now default to `model_type="seq"`, `seq_type="bilstm"`. | v2.1: val RMSE=3.46 px, F1=0.934 | val RMSE≈1.94 px, F1≈0.93 | val RMSE≈-1.5 px |
 ```
 
-After the first training run, fill in best smoothed `val_rmse_pixels`, `val_presence_f1`, and velocity error.
+After each run, fill in best smoothed `val_rmse_pixels`, `val_presence_f1`, and velocity error.
 
 ---
 
