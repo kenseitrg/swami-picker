@@ -1,6 +1,6 @@
 # Phase 4: Supervised Fine-Tuning & Dispersion Curve Picking — TODO
 
-> **Status:** Implementation in progress — model refactored to single 257-class head, k-fold CV, smoothed checkpoint selection, smaller model, and cleaner visualizations (2026-06-13).  
+> **Status:** Implementation complete — final v2.1 model trained and validated. Best val RMSE=3.46 px, smoothed=3.77 px, val F1=0.934, no mode jumps.  
 > **Depends on:** Phase 3 (✅ annotations collected)  
 > **Goal:** Train a supervised model that predicts a dense `(256,)` dispersion-curve pick from a raw `(1, 256, 256)` FK spectrum.  
 > **Tests:** 34 passing for Phase 4 modules after refactor; full suite status TBD.
@@ -458,8 +458,8 @@ If **coverage is much lower than true coverage** → the single-head model is st
 9. ✅ **`scripts/phase4_picking/train_picking_model.py`**
 10. ⏳ **`scripts/phase4_picking/run_inference.py`**
 11. ⏳ **`scripts/phase4_picking/export_dispersion_curves.py`**
-12. **Smoke test + full run** ⏳
-13. **Update `experiments/MODEL_CHANGELOG.md`** ⏳
+12. **Smoke test + full run** ✅
+13. **Update `experiments/MODEL_CHANGELOG.md`** ✅
 
 ---
 
