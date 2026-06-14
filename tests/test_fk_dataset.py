@@ -139,8 +139,17 @@ class TestFKDatasetInit:
         """An invalid split string must raise ``ValueError``."""
         with tempfile.TemporaryDirectory() as tmpdir:
             manifest = _create_mock_dataset(Path(tmpdir))
-            with pytest.raises(ValueError, match="split must be 'train' or 'val'"):
+            with pytest.raises(
+                ValueError, match="split must be 'train', 'val', or None"
+            ):
                 FKDataset(manifest, split="test")
+
+    def test_load_all_splits_with_none(self) -> None:
+        """``split=None`` loads all spectra regardless of split."""
+        with tempfile.TemporaryDirectory() as tmpdir:
+            manifest = _create_mock_dataset(Path(tmpdir), n_train=4, n_val=2)
+            ds = FKDataset(manifest, split=None)
+            assert len(ds) == 6
 
     def test_empty_split(self) -> None:
         """A split with no entries should have length 0."""

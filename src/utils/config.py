@@ -435,6 +435,30 @@ class PickingConfig:
         }
 
     @classmethod
+    def from_dict(cls, data: dict[str, Any]) -> PickingConfig:
+        """Load configuration from a plain dictionary.
+
+        Args:
+            data: Dictionary of configuration values.
+
+        Returns:
+            A populated ``PickingConfig`` instance.
+
+        Raises:
+            TypeError: If the dictionary contains unexpected keys.
+        """
+        raw = dict(data)
+        if "betas" in raw and isinstance(raw["betas"], list):
+            raw["betas"] = tuple(raw["betas"])
+
+        known = {f.name for f in cls.__dataclass_fields__.values()}
+        unknown = set(raw) - known
+        if unknown:
+            raise TypeError(f"Unexpected config keys: {unknown}")
+
+        return cls(**raw)
+
+    @classmethod
     def from_yaml(cls, path: Path) -> PickingConfig:
         """Load configuration from a YAML file.
 
@@ -454,15 +478,7 @@ class PickingConfig:
         with open(path) as fh:
             raw: dict[str, Any] = yaml.safe_load(fh)
 
-        if "betas" in raw and isinstance(raw["betas"], list):
-            raw["betas"] = tuple(raw["betas"])
-
-        known = {f.name for f in cls.__dataclass_fields__.values()}
-        unknown = set(raw) - known
-        if unknown:
-            raise TypeError(f"Unexpected config keys: {unknown}")
-
-        return cls(**raw)
+        return cls.from_dict(raw)
 
     def save_yaml(self, path: Path) -> None:
         """Save configuration to a YAML file.
