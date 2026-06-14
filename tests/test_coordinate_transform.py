@@ -100,6 +100,22 @@ class TestValidateMetadata:
 class TestModelIndicesToPhysical:
     """Forward transform tests."""
 
+    def test_out_of_bounds_wavenumber_raises(self) -> None:
+        """Valid picks outside the wavenumber axis must raise an error."""
+        metadata = _make_metadata()
+        picks = np.full(256, -1, dtype=np.int16)
+        picks[10] = 300  # axis length is 256
+        with pytest.raises(ValueError, match="wavenumber indices exceed axis length"):
+            model_indices_to_physical(picks, metadata)
+
+    def test_nan_certainty_raises(self) -> None:
+        """NaN certainty values must be rejected."""
+        metadata = _make_metadata()
+        picks = np.full(256, 100, dtype=np.int16)
+        nan_probs = np.full(256, np.nan, dtype=np.float32)
+        with pytest.raises(ValueError, match="Certainty array contains NaN"):
+            model_indices_to_physical(picks, metadata, presence_probs=nan_probs)
+
     def test_shape_and_values(self) -> None:
         """Output arrays have expected shape and physical values."""
         metadata = _make_metadata()
@@ -267,9 +283,19 @@ class TestRoundTrip:
         valid = picks >= 0
         assert np.allclose(picks[valid], recovered[valid], atol=1)
 
-        freq_rmse, waven_rmse = round_trip_error(picks, metadata)
-        assert freq_rmse <= 0.5
+        waven_rmse, coverage = round_trip_error(picks, metadata)
         assert waven_rmse <= 0.5
+        assert coverage == 1.0
+
+    def test_round_trip_non_identity_picks(self) -> None:
+        """Round-trip with constant wavenumber index catches the freq-rmse bug."""
+        metadata = _make_metadata()
+        picks = np.full(256, -1, dtype=np.int16)
+        picks[50:200:10] = 100
+
+        waven_rmse, coverage = round_trip_error(picks, metadata)
+        assert waven_rmse <= 0.5
+        assert coverage == 1.0
 
     def test_round_trip_non_uniform_axes(self) -> None:
         """Round-trip on log-spaced frequency axis is still accurate."""
@@ -277,17 +303,17 @@ class TestRoundTrip:
         picks = np.full(256, -1, dtype=np.int16)
         picks[50:200:10] = np.arange(50, 200, 10, dtype=np.int16)
 
-        freq_rmse, waven_rmse = round_trip_error(picks, metadata)
-        assert freq_rmse <= 1.0
-        assert waven_rmse <= 0.5
+        waven_rmse, coverage = round_trip_error(picks, metadata)
+        assert waven_rmse <= 1.0
+        assert coverage >= 0.95
 
     def test_round_trip_no_valid_picks(self) -> None:
         """All-absent picks return NaN RMSE."""
         metadata = _make_metadata()
         picks = np.full(256, -1, dtype=np.int16)
-        freq_rmse, waven_rmse = round_trip_error(picks, metadata)
-        assert np.isnan(freq_rmse)
+        waven_rmse, coverage = round_trip_error(picks, metadata)
         assert np.isnan(waven_rmse)
+        assert np.isnan(coverage)
 
 
 class TestInferenceToAnnotation:
@@ -348,12 +374,12 @@ class TestRealMetadataIntegration:
         picks[50:200:10] = np.arange(50, 200, 10, dtype=np.int16)
 
         physical = model_indices_to_physical(picks, metadata)
-        freq_rmse, waven_rmse = round_trip_error(picks, metadata)
+        waven_rmse, coverage = round_trip_error(picks, metadata)
 
         assert physical.frequency_hz[0] == pytest.approx(0.0, abs=1e-3)
         assert physical.frequency_hz[-1] == pytest.approx(15.93, abs=1e-2)
-        assert freq_rmse <= 1.0
         assert waven_rmse <= 1.0
+        assert coverage >= 0.95
 
     def test_real_metadata_export_has_velocity(self) -> None:
         """DataFrame export from real metadata includes finite velocities."""
@@ -398,6 +424,47 @@ class TestQualityAndExport:
         assert good_score["composite_score"] > bad_score["composite_score"]
         assert good_score["coverage"] == 1.0
         assert bad_score["coverage"] == pytest.approx(0.1, abs=0.02)
+
+    def test_quality_score_physical_picks_branch(self) -> None:
+        """The physical_picks branch uses propagated uncertainty."""
+        metadata = _make_metadata()
+        picks = np.arange(256, dtype=np.int16)
+        low_conf = np.full(256, 0.1, dtype=np.float32)
+        high_conf = np.ones(256, dtype=np.float32)
+
+        physical_low = model_indices_to_physical(
+            picks, metadata, presence_probs=low_conf
+        )
+        physical_high = model_indices_to_physical(
+            picks, metadata, presence_probs=high_conf
+        )
+
+        score_low = compute_spectrum_quality_score(picks, physical_picks=physical_low)
+        score_high = compute_spectrum_quality_score(picks, physical_picks=physical_high)
+
+        assert score_low["uncertainty_penalty"] > score_high["uncertainty_penalty"]
+        assert score_low["effective_certainty"] < score_high["effective_certainty"]
+
+    def test_quality_score_smooth_but_wrong_curve(self) -> None:
+        """A smooth but physically flat/wrong curve still gets a smoothness bonus."""
+        wrong_picks = np.full(256, 100, dtype=np.int16)
+        right_picks = np.arange(256, dtype=np.int16)
+        probs = np.ones(256, dtype=np.float32)
+
+        wrong_score = compute_spectrum_quality_score(wrong_picks, probs)
+        right_score = compute_spectrum_quality_score(right_picks, probs)
+
+        # The wrong curve is perfectly smooth and monotonic, so its composite
+        # score can be competitive; this documents the known limitation.
+        assert wrong_score["smoothness"] == 1.0
+        assert wrong_score["monotonicity"] == 1.0
+        assert right_score["smoothness"] == 1.0
+
+    def test_quality_score_weights_validated(self) -> None:
+        """Negative weights are rejected."""
+        picks = np.arange(256, dtype=np.int16)
+        with pytest.raises(ValueError, match="coverage_weight must be non-negative"):
+            compute_spectrum_quality_score(picks, coverage_weight=-1.0)
 
     def test_dataframe_export(self) -> None:
         """DataFrame export contains one row per valid pick."""

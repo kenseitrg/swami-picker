@@ -11,10 +11,12 @@ preprocessed spectrum's metadata (``freq_axis_resized`` and
 ``waven_axis_resized``).  This avoids double interpolation through the original
 grid and makes round-trip tests exact up to quantization.
 
-Uncertainty propagation is first-order: a model pick index has a base
-quantization uncertainty of 0.5 pixel, scaled by the inverse of the pick
-certainty (presence probability or confidence).  The pixel uncertainty is then
-multiplied by the local physical bin width to yield Hz / 1/m uncertainties.
+Uncertainty propagation is first-order and heuristic: a model pick index has
+a base quantization uncertainty of 0.5 pixel, scaled by the inverse of the
+pick certainty (presence probability or confidence).  The pixel uncertainty
+is then multiplied by the local physical bin width to yield Hz / 1/m
+uncertainties.  These values are conservative bounds, not calibrated 1σ
+Gaussian errors, and should be treated as such in downstream inversion.
 """
 
 from __future__ import annotations
@@ -68,7 +70,9 @@ class PhysicalPicks:
         wavenumber_inv_m: Wavenumber values in 1/m for picked columns, else NaN.
         frequency_uncertainty_hz: Frequency uncertainty in Hz for each column.
         wavenumber_uncertainty_inv_m: Wavenumber uncertainty in 1/m for picked
-            columns, else NaN.
+            columns, else NaN.  These are conservative quantization-derived
+            bounds scaled by a heuristic certainty multiplier, not calibrated
+            1σ Gaussian errors.
         pick_certainty: Per-column certainty in ``[0, 1]``.
         valid_mask: ``True`` for columns with a valid wavenumber pick.
     """
@@ -291,6 +295,13 @@ def model_indices_to_physical(
         raise ValueError(msg)
 
     valid_mask = picks_arr >= 0
+    if np.any(valid_mask & (picks_arr >= waven_axis.size)):
+        msg = (
+            f"One or more wavenumber indices exceed axis length "
+            f"{waven_axis.size}: max valid pick = {int(picks_arr[valid_mask].max())}"
+        )
+        raise ValueError(msg)
+
     k_idx = np.where(valid_mask, picks_arr, 0).astype(np.int64)
     k_idx = np.clip(k_idx, 0, waven_axis.size - 1)
 
@@ -320,6 +331,10 @@ def model_indices_to_physical(
         confidence,
         certainty_strategy,
     )
+    if not np.all(np.isfinite(cert)):
+        msg = "Certainty array contains NaN or Inf values"
+        raise ValueError(msg)
+
     multiplier = _sigma_multiplier(
         cert,
         certainty_floor,
@@ -442,14 +457,23 @@ def round_trip_error(
 ) -> tuple[float, float]:
     """Compute forward → inverse round-trip error in pixel indices.
 
+    The forward transform maps model indices to physical units; the inverse
+    transform maps physical units back to dense model indices.  Because the
+    frequency column index is fixed by the model grid, frequency is recovered
+    by construction and is not a meaningful error source here.  This function
+    therefore returns the wavenumber RMSE and the fraction of originally valid
+    columns that remain valid after the round-trip.
+
     Args:
         picks: Dense model pick array of shape ``(W,)``.
         metadata: Preprocessed spectrum metadata.
 
     Returns:
-        Tuple of ``(frequency_rmse, wavenumber_rmse)`` in pixel indices.  Only
-        valid pick columns are evaluated.  Returns ``(NaN, NaN)`` if no valid
-        picks exist.
+        Tuple of ``(wavenumber_rmse, recovered_coverage)``.  ``wavenumber_rmse``
+        is the RMSE of the recovered wavenumber indices in pixels.
+        ``recovered_coverage`` is the fraction of originally valid columns that
+        still have a valid pick after the round-trip.  Returns ``(NaN, NaN)``
+        if no valid picks exist.
     """
     physical = model_indices_to_physical(picks, metadata)
     valid = physical.valid_mask
@@ -462,13 +486,12 @@ def round_trip_error(
         metadata,
     )
 
-    freq_cols = np.arange(picks.shape[0], dtype=np.int64)
-    freq_error = (freq_cols[valid] - recovered[valid]).astype(np.float64)
     waven_error = (picks[valid] - recovered[valid]).astype(np.float64)
-
-    freq_rmse = float(np.sqrt(np.mean(freq_error**2)))
     waven_rmse = float(np.sqrt(np.mean(waven_error**2)))
-    return freq_rmse, waven_rmse
+
+    recovered_valid = recovered[valid] >= 0
+    recovered_coverage = float(np.mean(recovered_valid))
+    return waven_rmse, recovered_coverage
 
 
 def inference_to_annotation_record(
@@ -533,63 +556,144 @@ def compute_spectrum_quality_score(
     picks: NDArray[np.int16] | NDArray[np.int64],
     presence_probs: NDArray[np.float32] | None = None,
     physical_picks: PhysicalPicks | None = None,
-    coverage_weight: float = 0.3,
-    certainty_weight: float = 0.4,
-    smoothness_weight: float = 0.3,
+    coverage_weight: float = 0.25,
+    certainty_weight: float = 0.35,
+    smoothness_weight: float = 0.25,
+    monotonicity_weight: float = 0.15,
+    smoothness_threshold: float = 2.0,
 ) -> dict[str, float]:
     """Compute scalar quality metrics for an inferred dispersion curve.
 
-    Lower scores indicate poorer quality and are useful for selecting spectra
-    that need manual re-annotation.
+    The composite score is intended as a coarse triage signal for selecting
+    spectra that likely need manual re-annotation.  It is *not* a substitute
+    for expert review: physically incorrect but smooth/flat curves can score
+    well, and steep but correct dispersion curves can score lower.  Use it to
+    rank spectra, not to accept or reject them automatically.
 
     Args:
         picks: Dense model pick array of shape ``(W,)``.
         presence_probs: Optional model presence probabilities of shape ``(W,)``.
         physical_picks: Optional ``PhysicalPicks`` for uncertainty-aware metrics.
-        coverage_weight: Weight for the coverage term.
-        certainty_weight: Weight for the mean certainty term.
-        smoothness_weight: Weight for the curve smoothness term.
+            When provided, the propagated wavenumber uncertainty is used to
+            penalize the certainty term.
+        coverage_weight: Weight for the coverage term.  Must be non-negative.
+        certainty_weight: Weight for the mean certainty term.  Must be
+            non-negative.
+        smoothness_weight: Weight for the curve smoothness term.  Must be
+            non-negative.
+        monotonicity_weight: Weight for the monotonicity term.  Must be
+            non-negative.
+        smoothness_threshold: Pixel-difference threshold for considering two
+            adjacent picks "smooth".  Default 2 allows moderate dispersion
+            slopes; increase for data with steep dispersion curves.
 
     Returns:
         Dictionary with ``coverage``, ``mean_certainty``, ``smoothness``,
-        and ``composite_score`` (higher is better, range roughly ``[0, 1]``).
+        ``monotonicity``, ``uncertainty_penalty``, and ``composite_score``
+        (higher is better, range roughly ``[0, 1]``).
+
+    Raises:
+        ValueError: If any weight is negative.
     """
+    for name, value in (
+        ("coverage_weight", coverage_weight),
+        ("certainty_weight", certainty_weight),
+        ("smoothness_weight", smoothness_weight),
+        ("monotonicity_weight", monotonicity_weight),
+    ):
+        if value < 0.0:
+            msg = f"{name} must be non-negative, got {value}"
+            raise ValueError(msg)
+
     picks_arr = np.asarray(picks)
     n_cols = picks_arr.shape[0]
     valid = picks_arr >= 0
     coverage = float(np.mean(valid)) if n_cols > 0 else 0.0
 
-    if presence_probs is not None:
-        probs_arr = np.asarray(presence_probs, dtype=np.float32)
-        mean_certainty = float(np.mean(probs_arr[valid])) if np.any(valid) else 0.0
-    elif physical_picks is not None:
+    if physical_picks is not None:
+        if physical_picks.pick_certainty.shape != (n_cols,):
+            msg = (
+                f"physical_picks.pick_certainty shape "
+                f"{physical_picks.pick_certainty.shape} does not match picks shape "
+                f"{(n_cols,)}"
+            )
+            raise ValueError(msg)
         mean_certainty = (
             float(np.mean(physical_picks.pick_certainty[valid]))
             if np.any(valid)
             else 0.0
         )
+        # Penalize high normalized wavenumber uncertainty on valid picks.
+        if np.any(valid) and np.any(
+            np.isfinite(physical_picks.wavenumber_uncertainty_inv_m[valid])
+        ):
+            waven_unc = physical_picks.wavenumber_uncertainty_inv_m[valid]
+            finite = np.isfinite(waven_unc)
+            if np.any(finite):
+                # Normalize by median bin width to make the penalty scale-invariant.
+                # Use a normalized [0, 1] proxy axis; the penalty measures
+                # uncertainty in units of bins, not physical meters.
+                proxy_axis = np.linspace(0.0, 1.0, n_cols)
+                waven_axis_width = np.median(_bin_widths(proxy_axis))
+                normalized_unc = waven_unc[finite] / (waven_axis_width + 1e-12)
+                uncertainty_penalty = float(
+                    np.mean(np.clip(normalized_unc / 5.0, 0.0, 1.0))
+                )
+            else:
+                uncertainty_penalty = 0.0
+        else:
+            uncertainty_penalty = 0.0
+    elif presence_probs is not None:
+        probs_arr = np.asarray(presence_probs, dtype=np.float32)
+        if probs_arr.shape != (n_cols,):
+            msg = f"presence_probs shape {probs_arr.shape} does not match picks shape {(n_cols,)}"
+            raise ValueError(msg)
+        mean_certainty = float(np.mean(probs_arr[valid])) if np.any(valid) else 0.0
+        uncertainty_penalty = 0.0
     else:
         mean_certainty = float(np.mean(valid)) if n_cols > 0 else 0.0
+        uncertainty_penalty = 0.0
 
-    # Smoothness: fraction of adjacent valid picks with <= 1 pixel difference.
+    # Adjust certainty by uncertainty penalty: high normalized uncertainty
+    # reduces the effective certainty score.
+    effective_certainty = mean_certainty * (1.0 - uncertainty_penalty)
+
+    # Smoothness: fraction of adjacent valid picks with |Δk| <= threshold.
     if np.sum(valid) >= 2:
         valid_indices = np.nonzero(valid)[0]
         diffs = np.abs(np.diff(picks_arr[valid_indices]).astype(np.float64))
-        smoothness = float(np.mean(diffs <= 1.0))
+        smoothness = float(np.mean(diffs <= smoothness_threshold))
     else:
         smoothness = 0.0
 
-    total_weight = coverage_weight + certainty_weight + smoothness_weight
+    # Monotonicity: fraction of adjacent valid pairs that are monotonic.
+    # Dispersion curves are usually monotonic in frequency-wavenumber space.
+    if np.sum(valid) >= 2:
+        valid_indices = np.nonzero(valid)[0]
+        diffs = np.diff(picks_arr[valid_indices].astype(np.float64))
+        # Either non-increasing or non-decreasing counts as monotonic.
+        monotonic = (diffs >= -0.5) | (diffs <= 0.5)
+        monotonicity = float(np.mean(monotonic))
+    else:
+        monotonicity = 0.0
+
+    total_weight = (
+        coverage_weight + certainty_weight + smoothness_weight + monotonicity_weight
+    )
     composite = (
         coverage_weight * coverage
-        + certainty_weight * mean_certainty
+        + certainty_weight * effective_certainty
         + smoothness_weight * smoothness
+        + monotonicity_weight * monotonicity
     ) / (total_weight + 1e-8)
 
     return {
         "coverage": coverage,
         "mean_certainty": mean_certainty,
+        "effective_certainty": effective_certainty,
+        "uncertainty_penalty": uncertainty_penalty,
         "smoothness": smoothness,
+        "monotonicity": monotonicity,
         "composite_score": composite,
     }
 
