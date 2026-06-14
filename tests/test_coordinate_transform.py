@@ -445,6 +445,33 @@ class TestQualityAndExport:
         assert score_low["uncertainty_penalty"] > score_high["uncertainty_penalty"]
         assert score_low["effective_certainty"] < score_high["effective_certainty"]
 
+    def test_quality_score_allows_trends_and_steep_tails(self) -> None:
+        """Relative smoothness allows gradual trends and steep monotonic tails."""
+        trend_picks = np.arange(256, dtype=np.int16)
+        steep_tail = np.concatenate(
+            [
+                np.arange(100, dtype=np.int16),
+                np.arange(100, 240, 4, dtype=np.int16),
+            ]
+        )
+        # Pad steep_tail to length 256 so presence_probs matches.
+        steep_tail = np.concatenate(
+            [steep_tail, np.full(256 - len(steep_tail), 236, dtype=np.int16)]
+        )
+        spike_curve = np.arange(256, dtype=np.int16)
+        spike_curve[128] = 200
+
+        probs = np.ones(256, dtype=np.float32)
+        trend_score = compute_spectrum_quality_score(trend_picks, probs)
+        steep_score = compute_spectrum_quality_score(steep_tail, probs)
+        spike_score = compute_spectrum_quality_score(spike_curve, probs)
+
+        # Gradual trends and steep monotonic tails should score high.
+        assert trend_score["smoothness"] == 1.0
+        assert steep_score["smoothness"] >= 0.99
+        # A single spike should be penalized.
+        assert spike_score["smoothness"] < 1.0
+
     def test_quality_score_smooth_but_wrong_curve(self) -> None:
         """A smooth but physically flat/wrong curve still gets a smoothness bonus."""
         wrong_picks = np.full(256, 100, dtype=np.int16)

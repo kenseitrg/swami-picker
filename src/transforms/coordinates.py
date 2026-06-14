@@ -560,7 +560,7 @@ def compute_spectrum_quality_score(
     certainty_weight: float = 0.35,
     smoothness_weight: float = 0.25,
     monotonicity_weight: float = 0.15,
-    smoothness_threshold: float = 2.0,
+    smoothness_threshold: float = 1.0,
 ) -> dict[str, float]:
     """Compute scalar quality metrics for an inferred dispersion curve.
 
@@ -583,9 +583,11 @@ def compute_spectrum_quality_score(
             non-negative.
         monotonicity_weight: Weight for the monotonicity term.  Must be
             non-negative.
-        smoothness_threshold: Pixel-difference threshold for considering two
-            adjacent picks "smooth".  Default 2 allows moderate dispersion
-            slopes; increase for data with steep dispersion curves.
+        smoothness_threshold: Fractional second-difference threshold for
+            considering a local pick "smooth".  Default 1.0 means a pick is
+            smooth if its second difference is within one bin of the local
+            trend.  This penalizes mode jumps and spikes but allows gradual
+            trends and steep monotonic tails.
 
     Returns:
         Dictionary with ``coverage``, ``mean_certainty``, ``smoothness``,
@@ -658,11 +660,23 @@ def compute_spectrum_quality_score(
     # reduces the effective certainty score.
     effective_certainty = mean_certainty * (1.0 - uncertainty_penalty)
 
-    # Smoothness: fraction of adjacent valid picks with |Δk| <= threshold.
-    if np.sum(valid) >= 2:
+    # Relative smoothness: penalize local second-difference outliers (jumps
+    # and spikes) while allowing gradual trends and steep monotonic tails.
+    if np.sum(valid) >= 3:
         valid_indices = np.nonzero(valid)[0]
-        diffs = np.abs(np.diff(picks_arr[valid_indices]).astype(np.float64))
-        smoothness = float(np.mean(diffs <= smoothness_threshold))
+        k_valid = picks_arr[valid_indices].astype(np.float64)
+        diffs = np.diff(k_valid)
+        second_diffs = np.diff(diffs)
+
+        # Estimate local trend magnitude as the average of the absolute first
+        # differences around each second difference.  Add one bin so that flat
+        # regions do not get a zero tolerance.
+        left_trend = np.abs(diffs[:-1])
+        right_trend = np.abs(diffs[1:])
+        local_trend = 0.5 * (left_trend + right_trend) + 1.0
+
+        relative_jump = np.abs(second_diffs) / local_trend
+        smoothness = float(np.mean(relative_jump <= smoothness_threshold))
     else:
         smoothness = 0.0
 
