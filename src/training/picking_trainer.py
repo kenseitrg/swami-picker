@@ -16,6 +16,7 @@ from typing import Any
 import numpy as np
 import torch
 import torch.nn as nn
+import torch.nn.functional as F
 from torch.amp import GradScaler
 from torch.utils.data import DataLoader
 
@@ -417,6 +418,8 @@ class PickingTrainer:
             vis_pred = torch.cat(all_pred, dim=0)[:6]
             vis_probs = torch.cat(all_probs, dim=0)[:6]
             vis_logits = torch.cat(all_logits, dim=0)[:6]
+            if vis_logits.dim() == 4:
+                vis_logits = torch.log(F.softmax(vis_logits, dim=2).mean(dim=1) + 1e-8)
 
             plot_curve_overlays(
                 vis_spectra,

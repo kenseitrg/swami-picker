@@ -162,14 +162,22 @@ class PickingLoss(nn.Module):
         probs = F.softmax(logits, dim=2)  # (B, M, C, W)
         return torch.log(probs.mean(dim=1) + 1e-8)  # (B, C, W)
 
-    def _smoothness_loss(self, logits: torch.Tensor) -> torch.Tensor:
-        """Penalize large changes in the expected wavenumber index.
+    def _expected_pick_index(
+        self, logits: torch.Tensor
+    ) -> tuple[torch.Tensor, torch.Tensor]:
+        """Compute expected wavenumber index and presence mass.
+
+        The pick probabilities are normalized over the pick classes so
+        that the expected index is independent of the presence/absence
+        probability.  The presence mass is returned separately so callers
+        can mask invalid transitions.
 
         Args:
             logits: Tensor of shape ``(B, num_classes, W)``.
 
         Returns:
-            Scalar smoothness loss.
+            Tuple of ``(expected, presence_mass)`` where both tensors
+            have shape ``(B, W)``.
         """
         probs = F.softmax(logits, dim=1)  # (B, C, W)
         absent_mask = torch.ones(
@@ -178,43 +186,19 @@ class PickingLoss(nn.Module):
         absent_mask[self.absent_class] = False
         pick_probs = probs[:, absent_mask, :]  # (B, H, W)
 
-        class_indices = torch.arange(pick_probs.shape[1], device=logits.device).float()
-        expected = (pick_probs * class_indices.view(1, -1, 1)).sum(dim=1)
-        diff = expected[:, 1:] - expected[:, :-1]
-        return torch.mean(diff.abs())
-
-    def _monotonicity_loss(self, logits: torch.Tensor) -> torch.Tensor:
-        """Soft penalty for non-monotonic expected pick sequences.
-
-        Encourages the expected pick index to either increase or decrease
-        monotonically along the frequency axis.  The penalty is the
-        minimum of the total positive and total negative change, so a
-        perfectly monotonic curve (in either direction) receives zero
-        loss.
-
-        Args:
-            logits: Tensor of shape ``(B, num_classes, W)``.
-
-        Returns:
-            Scalar monotonicity loss.
-        """
-        probs = F.softmax(logits, dim=1)
-        absent_mask = torch.ones(
-            logits.shape[1], dtype=torch.bool, device=logits.device
-        )
-        absent_mask[self.absent_class] = False
-        pick_probs = probs[:, absent_mask, :]
+        pick_mass = pick_probs.sum(dim=1, keepdim=True)  # (B, 1, W)
+        pick_probs_norm = pick_probs / (pick_mass + 1e-8)
 
         class_indices = torch.arange(pick_probs.shape[1], device=logits.device).float()
-        expected = (pick_probs * class_indices.view(1, -1, 1)).sum(dim=1)
-        diff = expected[:, 1:] - expected[:, :-1]
-
-        pos_change = F.relu(diff).sum(dim=1)
-        neg_change = F.relu(-diff).sum(dim=1)
-        return torch.mean(torch.minimum(pos_change, neg_change))
+        expected = (pick_probs_norm * class_indices.view(1, -1, 1)).sum(dim=1)
+        return expected, pick_mass.squeeze(1)
 
     def _smoothness_loss(self, logits: torch.Tensor) -> torch.Tensor:
         """Penalize large changes in the expected wavenumber index.
+
+        Transitions across columns with negligible presence mass are
+        masked out so that the loss does not conflate presence changes
+        with wavenumber jumps.
 
         Args:
             logits: Tensor of shape ``(B, num_classes, W)``.
@@ -222,17 +206,10 @@ class PickingLoss(nn.Module):
         Returns:
             Scalar smoothness loss.
         """
-        probs = F.softmax(logits, dim=1)  # (B, C, W)
-        absent_mask = torch.ones(
-            logits.shape[1], dtype=torch.bool, device=logits.device
-        )
-        absent_mask[self.absent_class] = False
-        pick_probs = probs[:, absent_mask, :]  # (B, H, W)
-
-        class_indices = torch.arange(pick_probs.shape[1], device=logits.device).float()
-        expected = (pick_probs * class_indices.view(1, -1, 1)).sum(dim=1)
+        expected, presence_mass = self._expected_pick_index(logits)
         diff = expected[:, 1:] - expected[:, :-1]
-        return torch.mean(diff.abs())
+        valid = (presence_mass[:, 1:] > 1e-3) & (presence_mass[:, :-1] > 1e-3)
+        return (diff.abs() * valid.float()).sum() / (valid.sum() + 1e-8)
 
     def _monotonicity_loss(self, logits: torch.Tensor) -> torch.Tensor:
         """Soft penalty for non-monotonic expected pick sequences.
@@ -241,7 +218,8 @@ class PickingLoss(nn.Module):
         monotonically along the frequency axis.  The penalty is the
         minimum of the total positive and total negative change, so a
         perfectly monotonic curve (in either direction) receives zero
-        loss.
+        loss.  Only valid transitions (both columns have presence mass)
+        contribute.
 
         Args:
             logits: Tensor of shape ``(B, num_classes, W)``.
@@ -249,17 +227,10 @@ class PickingLoss(nn.Module):
         Returns:
             Scalar monotonicity loss.
         """
-        probs = F.softmax(logits, dim=1)
-        absent_mask = torch.ones(
-            logits.shape[1], dtype=torch.bool, device=logits.device
-        )
-        absent_mask[self.absent_class] = False
-        pick_probs = probs[:, absent_mask, :]
-
-        class_indices = torch.arange(pick_probs.shape[1], device=logits.device).float()
-        expected = (pick_probs * class_indices.view(1, -1, 1)).sum(dim=1)
+        expected, presence_mass = self._expected_pick_index(logits)
         diff = expected[:, 1:] - expected[:, :-1]
+        valid = (presence_mass[:, 1:] > 1e-3) & (presence_mass[:, :-1] > 1e-3)
 
-        pos_change = F.relu(diff).sum(dim=1)
-        neg_change = F.relu(-diff).sum(dim=1)
+        pos_change = (F.relu(diff) * valid.float()).sum(dim=1)
+        neg_change = (F.relu(-diff) * valid.float()).sum(dim=1)
         return torch.mean(torch.minimum(pos_change, neg_change))

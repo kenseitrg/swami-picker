@@ -97,17 +97,12 @@ class _UNetBackbone(nn.Module):
                 embed_dim, base_channels * 4, kernel_size=2, stride=2
             )
             self.dec3 = ConvBlock(base_channels * 8, base_channels * 4, dropout=dropout)
-            self.enc2_to_bottleneck = nn.Sequential(
-                ConvBlock(base_channels * 2, base_channels * 4, dropout=dropout),
-                nn.MaxPool2d(2),
-            )
         else:
             self.enc3 = None
             self.pool3 = None
             self.bottleneck = ConvBlock(base_channels * 2, embed_dim, dropout=dropout)
             self.up3 = None
             self.dec3 = None
-            self.enc2_to_bottleneck = nn.Identity()
 
         self.up2 = nn.ConvTranspose2d(
             embed_dim if num_downsample == 2 else base_channels * 4,
@@ -264,6 +259,9 @@ class SeqPickingModel(nn.Module):
         super().__init__()
         if seq_type not in {"bilstm", "conv1d"}:
             msg = f"seq_type must be 'bilstm' or 'conv1d', got '{seq_type}'"
+            raise ValueError(msg)
+        if seq_type == "bilstm" and seq_hidden_dim % 2 != 0:
+            msg = f"seq_hidden_dim must be even for BiLSTM, got {seq_hidden_dim}"
             raise ValueError(msg)
 
         self.spectrum_height = spectrum_height
@@ -564,6 +562,9 @@ def inference_picks_multimode(
     presence_probs_all = 1.0 - probs[:, :, absent_class, :]  # (B, M, W)
     pick_probs_all = probs[:, :, :absent_class, :]  # (B, M, H, W)
 
+    # Per-mode argmax pick sequence.
+    mode_indices = pick_probs_all.argmax(dim=2)  # (B, M, W)
+
     picks_out = torch.full(
         (batch_size, width),
         -1,
@@ -572,45 +573,21 @@ def inference_picks_multimode(
     )
     presence_out = torch.zeros(batch_size, width, device=device)
 
+    idx_range = torch.arange(width, device=device)
+    denom = max(num_classes - 1, 1) ** 2
+
     for b in range(batch_size):
-        pick_probs_b = pick_probs_all[b]  # (M, H, W)
-        presence_probs_b = presence_probs_all[b]  # (M, W)
+        total_cost = torch.zeros(num_modes, device=device)
+        for m in range(num_modes):
+            idx = mode_indices[b, m].long()  # (W,)
+            local = -torch.log(pick_probs_all[b, m, idx, idx_range] + 1e-8)  # (W,)
+            trans = (
+                smoothness_weight * (idx[1:].float() - idx[:-1].float()) ** 2 / denom
+            )
+            total_cost[m] = local.sum() + trans.sum()
 
-        # Per-column top mode and top index.
-        col_mode = presence_probs_b.argmax(dim=0)  # (W,)
-        # pick_probs_b is (M, H, W).  For each column, pick the mode with
-        # the highest presence probability and then the most likely index
-        # within that mode.
-        col_idx = torch.stack(
-            [pick_probs_b[col_mode[w], :, w].argmax() for w in range(width)]
-        )  # (W,)
-
-        # DP over columns to pick the smoothest connected path.
-        best_mode = int(col_mode[0].item())
-        best_idx = int(col_idx[0].item())
-        picks_out[b, 0] = best_idx
-        presence_out[b, 0] = presence_probs_b[best_mode, 0]
-
-        for t in range(1, width):
-            prev_idx = int(picks_out[b, t - 1].item())
-            best_cost = float("inf")
-            best_m = best_mode
-
-            for m in range(num_modes):
-                # Local score: negative log-probability at this column.
-                k_t = int(col_idx[t].item())
-                local_score = -torch.log(pick_probs_b[m, k_t, t] + 1e-8).item()
-                transition = (
-                    smoothness_weight
-                    * (k_t - prev_idx) ** 2
-                    / max(num_classes - 1, 1) ** 2
-                )
-                cost = local_score + transition
-                if cost < best_cost:
-                    best_cost = cost
-                    best_m = m
-
-            picks_out[b, t] = int(col_idx[t].item())
-            presence_out[b, t] = presence_probs_b[best_m, t]
+        best_m = int(total_cost.argmin().item())
+        picks_out[b] = mode_indices[b, best_m]
+        presence_out[b] = presence_probs_all[b, best_m]
 
     return picks_out, presence_out
