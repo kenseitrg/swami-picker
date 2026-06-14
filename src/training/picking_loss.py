@@ -8,14 +8,14 @@ import torch.nn.functional as F
 
 
 class PickingLoss(nn.Module):
-    """Single 257-class cross-entropy loss per frequency column.
+    """Cross-entropy loss per frequency column.
 
-    Each frequency column is classified into one of
-    ``num_classes = spectrum_height + 1`` classes.  The last class is
+    Supports a single-classification head (``logits`` of shape
+    ``(B, num_classes, W)``) and a multi-mode head (``logits`` of shape
+    ``(B, num_modes, num_classes, W)``).  The last class is always
     "no pick".  Direct (human-clicked) picks are weighted higher than
-    interpolated picks.  An optional smoothness term penalizes large
-    changes in the predicted distribution between adjacent frequency
-    columns, encouraging continuous dispersion curves.
+    interpolated picks.  Optional smoothness and monotonicity terms
+    encourage continuous, geophysically plausible dispersion curves.
     """
 
     def __init__(
@@ -23,6 +23,7 @@ class PickingLoss(nn.Module):
         pick_weight: float = 1.0,
         direct_pick_weight: float = 2.0,
         smooth_weight: float = 0.0,
+        monotonic_weight: float = 0.0,
         absent_class: int | None = None,
     ) -> None:
         """Initialize the loss.
@@ -33,6 +34,8 @@ class PickingLoss(nn.Module):
                 relative to interpolated picks.
             smooth_weight: Weight for the frequency-axis smoothness term.
                 Set to ``0.0`` to disable.
+            monotonic_weight: Weight for the soft monotonicity term.  Set
+                to ``0.0`` to disable.
             absent_class: Index of the "no pick" class.  Defaults to the
                 last class.
         """
@@ -40,6 +43,7 @@ class PickingLoss(nn.Module):
         self.pick_weight = pick_weight
         self.direct_pick_weight = direct_pick_weight
         self.smooth_weight = smooth_weight
+        self.monotonic_weight = monotonic_weight
         self.absent_class = absent_class
 
     def forward(
@@ -51,7 +55,8 @@ class PickingLoss(nn.Module):
         """Compute the weighted cross-entropy loss.
 
         Args:
-            logits: Tensor of shape ``(B, num_classes, W)``.
+            logits: Tensor of shape ``(B, num_classes, W)`` for a single
+                head, or ``(B, num_modes, num_classes, W)`` for multi-mode.
             pick_target: Tensor of shape ``(B, W)`` containing wavenumber
                 indices in ``[0, H-1]`` or ``-1`` / ``H`` for unpicked
                 columns.
@@ -60,44 +65,105 @@ class PickingLoss(nn.Module):
 
         Returns:
             Tuple of ``(total_loss, loss_dict)`` where ``loss_dict``
-            contains ``pick_loss``.
+            contains ``pick_loss`` and optional auxiliary losses.
         """
         if self.absent_class is None:
-            self.absent_class = logits.shape[1] - 1
+            if logits.dim() == 3:
+                self.absent_class = logits.shape[1] - 1
+            else:
+                self.absent_class = logits.shape[2] - 1
 
-        # Convert -1 sentinel to the absent class index.
         target = pick_target.clone()
         target[target < 0] = self.absent_class
         target = target.long()
 
-        # Cross-entropy expects (N, C, ...) and target (N, ...).
-        ce = F.cross_entropy(logits, target, reduction="none")  # (B, W)
-
-        # Weight direct picks higher; absent columns are still graded
-        # because the model must learn to predict absence explicitly.
-        weights = torch.where(direct_mask, self.direct_pick_weight, 1.0)
-        ce = ce * weights
-
-        normalizer = weights.sum() + 1e-6
-        pick_loss = ce.sum() / normalizer
+        if logits.dim() == 3:
+            pick_loss = self._single_head_loss(logits, target, direct_mask)
+        else:
+            pick_loss = self._multi_mode_loss(logits, target, direct_mask)
 
         total_loss = self.pick_weight * pick_loss
-
         loss_dict: dict[str, torch.Tensor] = {"pick_loss": pick_loss.detach()}
 
+        # Use the expected single-head logits for auxiliary losses.
+        aux_logits = (
+            logits if logits.dim() == 3 else self._reduce_multi_mode_logits(logits)
+        )
+
         if self.smooth_weight > 0.0:
-            smooth_loss = self._smoothness_loss(logits)
+            smooth_loss = self._smoothness_loss(aux_logits)
             total_loss = total_loss + self.smooth_weight * smooth_loss
             loss_dict["smooth_loss"] = smooth_loss.detach()
 
+        if self.monotonic_weight > 0.0:
+            mono_loss = self._monotonicity_loss(aux_logits)
+            total_loss = total_loss + self.monotonic_weight * mono_loss
+            loss_dict["mono_loss"] = mono_loss.detach()
+
         return total_loss, loss_dict
+
+    def _single_head_loss(
+        self,
+        logits: torch.Tensor,
+        target: torch.Tensor,
+        direct_mask: torch.Tensor,
+    ) -> torch.Tensor:
+        """Cross-entropy for a single classification head."""
+        ce = F.cross_entropy(logits, target, reduction="none")
+        weights = torch.where(direct_mask, self.direct_pick_weight, 1.0)
+        ce = ce * weights
+        normalizer = weights.sum() + 1e-6
+        return ce.sum() / normalizer
+
+    def _multi_mode_loss(
+        self,
+        logits: torch.Tensor,
+        target: torch.Tensor,
+        direct_mask: torch.Tensor,
+    ) -> torch.Tensor:
+        """Cross-entropy for multi-mode head using best-alignment.
+
+        For each batch element, assign the target to the mode whose
+        current prediction is closest to the ground-truth picks.  This
+        avoids forcing a fixed mode ordering and lets the model learn
+        which mode is the fundamental.
+        """
+        batch_size, num_modes, num_classes, width = logits.shape
+        device = logits.device
+
+        # Per-mode cross-entropy (B, M, W).
+        logits_flat = logits.reshape(batch_size * num_modes, num_classes, width)
+        target_flat = (
+            target.unsqueeze(1)
+            .expand(-1, num_modes, -1)
+            .reshape(batch_size * num_modes, width)
+        )
+        ce_flat = F.cross_entropy(logits_flat, target_flat, reduction="none")
+        ce = ce_flat.reshape(batch_size, num_modes, width)
+
+        # Direct-pick weights (B, W) -> (B, 1, W).
+        weights = torch.where(direct_mask, self.direct_pick_weight, 1.0).unsqueeze(1)
+        weighted_ce = ce * weights
+
+        # Best-alignment: choose the mode with the lowest weighted CE per
+        # sample, averaged over columns.
+        per_mode_loss = weighted_ce.sum(dim=2) / (weights.sum(dim=2) + 1e-6)
+        best_mode = per_mode_loss.argmin(dim=1)  # (B,)
+
+        # Gather the loss from the best-aligned mode.
+        best_ce = weighted_ce[torch.arange(batch_size, device=device), best_mode, :]
+        best_weights = weights.squeeze(1)[torch.arange(batch_size, device=device)]
+        normalizer = best_weights.sum() + 1e-6
+        return best_ce.sum() / normalizer
+
+    def _reduce_multi_mode_logits(self, logits: torch.Tensor) -> torch.Tensor:
+        """Collapse multi-mode logits to a single head for aux losses."""
+        # Softmax over classes, then average across modes.
+        probs = F.softmax(logits, dim=2)  # (B, M, C, W)
+        return torch.log(probs.mean(dim=1) + 1e-8)  # (B, C, W)
 
     def _smoothness_loss(self, logits: torch.Tensor) -> torch.Tensor:
         """Penalize large changes in the expected wavenumber index.
-
-        This directly encourages the predicted dispersion curve to be
-        smooth along the frequency axis, rather than only asking the
-        full class distribution to be similar between adjacent columns.
 
         Args:
             logits: Tensor of shape ``(B, num_classes, W)``.
@@ -114,6 +180,86 @@ class PickingLoss(nn.Module):
 
         class_indices = torch.arange(pick_probs.shape[1], device=logits.device).float()
         expected = (pick_probs * class_indices.view(1, -1, 1)).sum(dim=1)
-        # expected is (B, W); penalize first-order differences.
         diff = expected[:, 1:] - expected[:, :-1]
         return torch.mean(diff.abs())
+
+    def _monotonicity_loss(self, logits: torch.Tensor) -> torch.Tensor:
+        """Soft penalty for non-monotonic expected pick sequences.
+
+        Encourages the expected pick index to either increase or decrease
+        monotonically along the frequency axis.  The penalty is the
+        minimum of the total positive and total negative change, so a
+        perfectly monotonic curve (in either direction) receives zero
+        loss.
+
+        Args:
+            logits: Tensor of shape ``(B, num_classes, W)``.
+
+        Returns:
+            Scalar monotonicity loss.
+        """
+        probs = F.softmax(logits, dim=1)
+        absent_mask = torch.ones(
+            logits.shape[1], dtype=torch.bool, device=logits.device
+        )
+        absent_mask[self.absent_class] = False
+        pick_probs = probs[:, absent_mask, :]
+
+        class_indices = torch.arange(pick_probs.shape[1], device=logits.device).float()
+        expected = (pick_probs * class_indices.view(1, -1, 1)).sum(dim=1)
+        diff = expected[:, 1:] - expected[:, :-1]
+
+        pos_change = F.relu(diff).sum(dim=1)
+        neg_change = F.relu(-diff).sum(dim=1)
+        return torch.mean(torch.minimum(pos_change, neg_change))
+
+    def _smoothness_loss(self, logits: torch.Tensor) -> torch.Tensor:
+        """Penalize large changes in the expected wavenumber index.
+
+        Args:
+            logits: Tensor of shape ``(B, num_classes, W)``.
+
+        Returns:
+            Scalar smoothness loss.
+        """
+        probs = F.softmax(logits, dim=1)  # (B, C, W)
+        absent_mask = torch.ones(
+            logits.shape[1], dtype=torch.bool, device=logits.device
+        )
+        absent_mask[self.absent_class] = False
+        pick_probs = probs[:, absent_mask, :]  # (B, H, W)
+
+        class_indices = torch.arange(pick_probs.shape[1], device=logits.device).float()
+        expected = (pick_probs * class_indices.view(1, -1, 1)).sum(dim=1)
+        diff = expected[:, 1:] - expected[:, :-1]
+        return torch.mean(diff.abs())
+
+    def _monotonicity_loss(self, logits: torch.Tensor) -> torch.Tensor:
+        """Soft penalty for non-monotonic expected pick sequences.
+
+        Encourages the expected pick index to either increase or decrease
+        monotonically along the frequency axis.  The penalty is the
+        minimum of the total positive and total negative change, so a
+        perfectly monotonic curve (in either direction) receives zero
+        loss.
+
+        Args:
+            logits: Tensor of shape ``(B, num_classes, W)``.
+
+        Returns:
+            Scalar monotonicity loss.
+        """
+        probs = F.softmax(logits, dim=1)
+        absent_mask = torch.ones(
+            logits.shape[1], dtype=torch.bool, device=logits.device
+        )
+        absent_mask[self.absent_class] = False
+        pick_probs = probs[:, absent_mask, :]
+
+        class_indices = torch.arange(pick_probs.shape[1], device=logits.device).float()
+        expected = (pick_probs * class_indices.view(1, -1, 1)).sum(dim=1)
+        diff = expected[:, 1:] - expected[:, :-1]
+
+        pos_change = F.relu(diff).sum(dim=1)
+        neg_change = F.relu(-diff).sum(dim=1)
+        return torch.mean(torch.minimum(pos_change, neg_change))

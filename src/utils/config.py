@@ -389,10 +389,23 @@ class PickingConfig:
     fold_index: int = 0  # which fold to use as validation when k_folds > 1
 
     # Model
+    model_type: str = "picking"  # "picking" | "seq" | "multimode"
     base_channels: int = 8
     embed_dim: int = 64
     spectrum_height: int = 256  # must match model input height (wavenumber bins)
     dropout: float = 0.3  # dropout inside conv blocks
+
+    # Sequence model (used when model_type == "seq")
+    seq_hidden_dim: int = 128
+    seq_layers: int = 2
+    seq_type: str = "bilstm"  # "bilstm" | "conv1d"
+
+    # Multi-mode model (used when model_type == "multimode")
+    num_modes: int = 3
+    mode_hidden_dim: int = 128
+
+    # U-Net depth: 2 or 3 downsample stages
+    num_downsample: int = 2
 
     # Augmentation (pick-synchronized)
     aug_enabled: bool = True
@@ -413,6 +426,7 @@ class PickingConfig:
     loss_pick_weight: float = 1.0
     direct_pick_weight: float = 2.0
     loss_smooth_weight: float = 0.0  # weight for frequency-axis smoothness loss
+    loss_monotonic_weight: float = 0.0  # weight for soft monotonicity loss
     min_val_coverage: float = 0.05  # minimum predicted val coverage for best checkpoint
     early_stopping_patience: int = 15
     smooth_window: int = 5  # epochs for moving-average val metric smoothing

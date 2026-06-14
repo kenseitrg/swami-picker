@@ -30,7 +30,7 @@ from src.evaluation.visualize_picking import (
     plot_probability_heatmap_overlay,
     plot_training_curves,
 )
-from src.models.picking_model import inference_picks
+from src.models.picking_model import inference_picks, inference_picks_multimode
 from src.training.picking_loss import PickingLoss
 from src.training.scheduler import get_cosine_schedule_with_warmup
 from src.utils.checkpoint import load_checkpoint, restore_rng_state, save_checkpoint
@@ -68,6 +68,7 @@ class PickingTrainer:
         argv: list[str] | None = None,
     ) -> None:
         """Initialize the trainer."""
+        self.model_type = getattr(config, "model_type", "picking")
         self.model = model.to(device)
         self.config = config
         self.device = device
@@ -81,6 +82,7 @@ class PickingTrainer:
             pick_weight=config.loss_pick_weight,
             direct_pick_weight=config.direct_pick_weight,
             smooth_weight=getattr(config, "loss_smooth_weight", 0.0),
+            monotonic_weight=getattr(config, "loss_monotonic_weight", 0.0),
         )
 
         self.optimizer = self._setup_optimizer()
@@ -101,6 +103,14 @@ class PickingTrainer:
 
         if resume_from is not None:
             self._load_checkpoint(resume_from)
+
+    def _inference_picks(
+        self, logits: torch.Tensor
+    ) -> tuple[torch.Tensor, torch.Tensor]:
+        """Dispatch to the correct inference helper for the model type."""
+        if self.model_type == "multimode":
+            return inference_picks_multimode(logits)
+        return inference_picks(logits)
 
     def _setup_optimizer(self) -> torch.optim.Optimizer:
         """Build the AdamW optimizer."""
@@ -302,7 +312,7 @@ class PickingTrainer:
             num_batches += 1
 
             with torch.no_grad():
-                pred_picks, presence_probs = inference_picks(logits)
+                pred_picks, presence_probs = self._inference_picks(logits)
                 true_presence = (pick_target >= 0).float()
                 rmse = compute_curve_rmse(pred_picks, pick_target)
                 f1 = compute_presence_f1(presence_probs, true_presence)
@@ -367,7 +377,7 @@ class PickingTrainer:
             loss, _ = self.criterion(logits, pick_target, direct_mask)
             total_loss += loss.item()
 
-            pred_picks, presence_probs = inference_picks(logits)
+            pred_picks, presence_probs = self._inference_picks(logits)
             true_presence = (pick_target >= 0).float()
             rmse = compute_curve_rmse(pred_picks, pick_target)
             f1 = compute_presence_f1(presence_probs, true_presence)

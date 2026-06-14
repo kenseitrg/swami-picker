@@ -1,0 +1,55 @@
+# Phase 4: Supervised dispersion-curve picking with frequency-axis sequence modeling.
+# U-Net + BiLSTM over frequency columns.
+# 5-fold cross-validation, fold 0 as validation.
+
+# Data
+training_data_path: "data/processed/phase4_training_data.npz"
+val_fraction: 0.10
+val_seed: 42
+min_direct_picks: 3
+k_folds: 5
+fold_index: 0
+
+# Model
+model_type: "seq"
+base_channels: 16
+embed_dim: 64
+spectrum_height: 256
+dropout: 0.5
+seq_hidden_dim: 128
+seq_layers: 2
+seq_type: "bilstm"
+num_downsample: 2
+
+# Augmentation (pick-synchronized)
+aug_enabled: true
+aug_noise_std: 0.05
+aug_intensity_jitter: 0.15
+aug_freq_shift_max: 0.0
+aug_waven_shift_max: 0.0
+
+# Training
+batch_size: 16
+accum_steps: 1
+epochs: 100
+lr: 1.0e-3
+weight_decay: 0.05
+betas: [0.9, 0.95]
+warmup_ratio: 0.1
+grad_clip_norm: 1.0
+loss_pick_weight: 1.0
+direct_pick_weight: 2.0
+loss_smooth_weight: 0.05
+loss_monotonic_weight: 0.0
+min_val_coverage: 0.05
+early_stopping_patience: 15
+smooth_window: 5
+seed: 42
+
+# System
+num_workers: 4
+pin_memory: true
+log_interval: 10
+
+# Logging
+visualization_epochs: [10, 25, 50, 75, 100]

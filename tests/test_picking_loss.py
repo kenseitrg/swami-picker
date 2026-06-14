@@ -115,3 +115,47 @@ def test_smoothness_loss_present_with_jumps():
 
     assert "smooth_loss" in loss_dict
     assert loss_dict["smooth_loss"].item() > 1e-3
+
+
+def test_monotonicity_loss_zero_when_monotonic():
+    """Monotonicity loss is zero for a strictly increasing expected curve."""
+    loss_fn = PickingLoss(monotonic_weight=1.0)
+    logits = torch.zeros(1, 257, 256)
+    # Expected index increases linearly from 0 to 255.
+    for w in range(256):
+        logits[0, w, w] = 10.0
+    pick_target = torch.full((1, 256), -1.0)
+    direct_mask = torch.zeros_like(pick_target, dtype=torch.bool)
+
+    total_loss, loss_dict = loss_fn(logits, pick_target, direct_mask)
+
+    assert "mono_loss" in loss_dict
+    assert torch.isclose(loss_dict["mono_loss"], torch.tensor(0.0), atol=1e-5)
+
+
+def test_monotonicity_loss_positive_when_oscillating():
+    """Monotonicity loss is positive when the expected curve oscillates."""
+    loss_fn = PickingLoss(monotonic_weight=1.0)
+    logits = torch.zeros(1, 257, 256)
+    # Expected index alternates between low and high values.
+    logits[:, 50, ::2] = 10.0
+    logits[:, 200, 1::2] = 10.0
+    pick_target = torch.full((1, 256), -1.0)
+    direct_mask = torch.zeros_like(pick_target, dtype=torch.bool)
+
+    total_loss, loss_dict = loss_fn(logits, pick_target, direct_mask)
+
+    assert "mono_loss" in loss_dict
+    assert loss_dict["mono_loss"].item() > 1e-3
+
+
+def test_multi_mode_loss_is_finite():
+    """Multi-mode logits produce a finite loss."""
+    loss_fn = PickingLoss()
+    logits = torch.randn(2, 3, 257, 256)
+    pick_target, direct_mask = _make_targets()
+
+    total_loss, loss_dict = loss_fn(logits, pick_target, direct_mask)
+
+    assert torch.isfinite(total_loss)
+    assert torch.isfinite(loss_dict["pick_loss"])
