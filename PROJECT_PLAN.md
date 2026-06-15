@@ -468,13 +468,15 @@ Before exporting to inversion software, validate coordinate mapping:
 
 **End-to-end run:** 1,392 spectra in ~8.8 s (~158 spectra/s). Composite scores range 0.729–0.950 (mean 0.853).
 
-### 5.3 Export Format for Inversion Software ⏳
+### 5.3 Export Format for Inversion Software ✅
 
-Planned script: `scripts/phase4_picking/export_dispersion_curves.py`.
+Implemented script: `scripts/phase4_picking/export_dispersion_curves.py`.
 
+- Converts every spectrum in `predictions.npz` to physical units using the matched coordinate transform pair.
 - Structured JSON/CSV per spectrum with fields: `spectrum_id`, `frequency_hz`, `wavenumber_inv_m`, `phase_velocity_m_s`, `frequency_uncertainty_hz`, `wavenumber_uncertainty_inv_m`, `pick_certainty`, `line_number`, `point_number`, `x_coord`, `y_coord`, `model_version`.
-- Compatibility: Export converters for Geopsy `.disp`, Dinver `.dat`, or generic CSV.
-- Fallback: Hybrid picking flag for edge cases requiring manual adjustment on original grid.
+- Also writes `all_dispersion_curves.csv` (combined) and `manifest.json` (per-spectrum summary).
+- Supports `--format {csv,json,both}`, `--certainty-strategy {presence,confidence,uniform}`, `--min-certainty`, and `--skip-absent`.
+- Scope is limited to CSV and JSON. Dedicated converters for Geopsy `.disp` or Dinver `.dat` are not implemented; the CSV columns can be transformed externally if a specific inversion package requires a different layout.
 
 ---
 

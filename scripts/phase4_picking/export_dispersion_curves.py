@@ -1,10 +1,14 @@
 #!/usr/bin/env python3
-"""Export inferred dispersion curves to inversion-ready CSV and JSON.
+"""Export inferred dispersion curves to CSV and JSON.
 
 Converts the model-space predictions produced by ``run_inference.py`` into
 physical units (Hz, 1/m, phase velocity) and writes one file per spectrum.
 A combined ``all_dispersion_curves.csv`` and a ``manifest.json`` summary are
 also produced.
+
+Supported export formats are CSV and JSON.  Geopsy ``.disp`` / Dinver ``.dat``
+converters are not implemented; the generic CSV/JSON output can be reformatted
+externally if a specific inversion package requires a different layout.
 
 Usage::
 

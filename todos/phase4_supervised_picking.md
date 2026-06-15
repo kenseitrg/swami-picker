@@ -423,15 +423,26 @@ Actions:
 
 **End-to-end run:** 1,392 spectra processed in ~8.8 s at ~158 spectra/s. Composite scores range 0.729–0.950 (mean 0.853). With default threshold 0.5, no spectra flagged; the score distribution is useful for ranking rather than hard filtering.
 
-### 9.2 Create `scripts/phase4_picking/export_dispersion_curves.py`
+### 9.2 Create `scripts/phase4_picking/export_dispersion_curves.py` ✅
+
+Implemented. Converts model-space predictions to physical units and exports:
+- Per-spectrum CSV and/or JSON files
+- Combined `all_dispersion_curves.csv`
+- `manifest.json` with per-spectrum summary
 
 Args:
 - `--predictions`: path to `predictions.npz`
 - `--output-dir`: directory for CSV/JSON exports
-- `--format`: `"csv"`, `"json"`, or `"geopsy"`
+- `--format`: `"csv"`, `"json"`, or `"both"`
+- `--model-version`: explicit version tag (auto-inferred from checkpoint directory if omitted)
+- `--certainty-strategy`: `"presence"` (default), `"confidence"`, or `"uniform"`
+- `--min-certainty`: minimum pick certainty for exported rows
+- `--skip-absent`: omit rows where the model predicted no pick
 
-Output one file per spectrum with columns:
-`spectrum_id, frequency_hz, wavenumber_inv_m, phase_velocity_m_s, presence_prob, model_version`
+Output columns per row:
+`spectrum_id, frequency_hz, wavenumber_inv_m, phase_velocity_m_s, frequency_uncertainty_hz, wavenumber_uncertainty_inv_m, pick_certainty, line_number, point_number, x_coord, y_coord, model_version`
+
+Supported formats are CSV and JSON only. Geopsy `.disp` / Dinver `.dat` converters are out of scope; the generic CSV can be reformatted externally if required.
 
 ---
 
