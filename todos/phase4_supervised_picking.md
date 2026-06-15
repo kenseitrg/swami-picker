@@ -500,7 +500,7 @@ If **coverage is much lower than true coverage** → the single-head model is st
 8. ✅ **`src/transforms/coordinates.py`** + tests
 9. ✅ **`scripts/phase4_picking/train_picking_model.py`**
 10. ✅ **`scripts/phase4_picking/run_inference.py`**
-11. ⏳ **`scripts/phase4_picking/export_dispersion_curves.py`**
+11. ✅ **`scripts/phase4_picking/export_dispersion_curves.py`**
 12. **Smoke test + full run** ✅
 13. **Update `experiments/MODEL_CHANGELOG.md`** ✅
 
