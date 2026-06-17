@@ -1,0 +1,54 @@
+# Phase 2C: CNN pseudo-label classifier for production data
+# Trains a shallow CNN directly on raw 256×256 spectra with GAP-direct 128-D embeddings.
+# Use this when engineered descriptors produce negative-Silhouette embeddings.
+
+# Data paths
+manifest_path: "data/prod/processed/manifest.json"
+pseudo_labels_path: "data/prod/processed/pseudo_labels_split.npz"
+feature_path: "data/prod/processed/features/features_descriptors.npz"
+
+# Model selection
+#   true  -> MLPClassifier on pre-extracted features
+#   false -> ShallowCNNClassifier on raw spectra
+use_features: false
+
+# MLP architecture (unused when use_features=false)
+mlp_hidden_dims: [256, 128]
+mlp_dropout: 0.2
+
+# CNN architecture
+cnn_dropout: 0.5
+cnn_embed_dim: 128 # 128=GAP-direct, 256=original MLP head
+
+# Augmentation (conservative: noise + intensity jitter only)
+# Applied inside model.forward() during training only.
+augment_noise_std: 0.05
+augment_intensity_jitter: 0.15
+augment_freq_shift_max: 0.0
+augment_waven_shift_max: 0.0
+augment_freq_dropout_prob: 0.0
+augment_freq_dropout_width: 0.05
+
+# Class imbalance handling
+use_class_weights: true
+
+# Training
+batch_size: 64
+accum_steps: 1
+epochs: 100
+lr: 0.0003
+weight_decay: 0.05
+betas: [0.9, 0.95]
+warmup_ratio: 0.1
+grad_clip_norm: 1.0
+seed: 42
+
+# Checkpoint selection
+smooth_window: 5
+
+# System
+num_workers: 4
+pin_memory: true
+
+# Logging
+log_interval: 50

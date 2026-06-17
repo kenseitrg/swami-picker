@@ -240,8 +240,28 @@ Outputs in `experiments/phase2c-mlp-final/`:
 python scripts/phase2_supervised/extract_mlp_embeddings.py \
     --checkpoint experiments/phase2c-mlp-final/checkpoints/best_model.pt \
     --manifest data/processed/manifest.json \
-    --output data/processed/mlp_embeddings_phase3.npz
+    --output data/prod/processed/mlp_embeddings_phase3.npz
 ```
+
+> **When the classifier fails:** If the trained MLP/CNN produces collapsed or negative-Silhouette embeddings, you can skip the classifier and use the raw clustering results directly for Phase 3. The annotation app only needs cluster labels and a per-cluster ranking; it does not require learned embeddings.
+>
+> Build a Phase-3 embeddings file from the clustering artifacts:
+>
+> ```bash
+> # Option A: use UMAP coordinates from clustering
+> python scripts/phase3_active_learning/prepare_embeddings_from_clustering.py \
+>     --labels data/prod/processed/pseudo_labels_split.npz \
+>     --embeddings-source umap \
+>     --output data/prod/processed/phase3_embeddings_clustering.npz
+>
+> # Option B: use standardized spectral descriptors (often higher Silhouette)
+> python scripts/phase3_active_learning/prepare_embeddings_from_clustering.py \
+>     --labels data/prod/processed/pseudo_labels_split.npz \
+>     --embeddings-source descriptors \
+>     --output data/prod/processed/phase3_embeddings_descriptors.npz
+> ```
+>
+> Then pass that file to `prepare_session.py` instead of `mlp_embeddings_phase3.npz`.
 
 ---
 
@@ -252,6 +272,15 @@ python scripts/phase2_supervised/extract_mlp_embeddings.py \
 ```bash
 python scripts/phase3_active_learning/prepare_session.py \
     --embeddings data/processed/mlp_embeddings_phase3.npz \
+    --percentage 15.0 \
+    --name iter0
+```
+
+If you are using raw clustering embeddings, pass that file instead:
+
+```bash
+python scripts/phase3_active_learning/prepare_session.py \
+    --embeddings data/prod/processed/phase3_embeddings_descriptors.npz \
     --percentage 15.0 \
     --name iter0
 ```
@@ -453,4 +482,4 @@ If you run out of memory:
 
 ---
 
-*Last updated: 2026-06-15*
+*Last updated: 2026-06-17*
