@@ -195,7 +195,28 @@ Outputs:
 - `data/processed/pseudo_labels.json` — cluster size summary + Silhouette score.
 - `data/processed/pseudo_labels.png` — UMAP scatter plot.
 
-If HDBSCAN produces one dominant cluster, run the **two-step hierarchical merge** (see `PROJECT_PLAN.md` §16.4 and `todos/phase2_fk_mae_pretraining.md` §16.9). The final merged labels used in production are saved as `pseudo_labels_merged.npz`.
+If HDBSCAN produces one dominant cluster, split it hierarchically and merge the resulting sub-labels back into the global label set. This is the approach used in production (see `PROJECT_PLAN.md` §16.4 and `todos/phase2_fk_mae_pretraining.md` §16.9).
+
+```bash
+python scripts/phase2_supervised/split_large_cluster.py \
+    --features data/processed/features/features_descriptors.npz \
+    --labels data/processed/pseudo_labels.npz \
+    --output data/processed/pseudo_labels_split.npz
+```
+
+Options:
+
+- `--target-cluster N` — split a specific cluster instead of the largest one.
+- `--auto-threshold 0.50` — only auto-split if the largest cluster exceeds this fraction of non-noise data (default 0.50).
+- `--min-cluster-size`, `--min-samples`, `--min-dist`, `--n-components`, `--n-neighbors` — tune the sub-clustering UMAP → HDBSCAN step.
+
+The script writes:
+
+- `pseudo_labels_split.npz` — merged global labels with new contiguous IDs for the sub-clusters.
+- `pseudo_labels_split.json` — cluster size distribution and Silhouette score.
+- `pseudo_labels_split.png` — before/after UMAP visualization.
+
+You can run the split step repeatedly (passing the previous output as `--labels`) until the cluster size distribution is balanced enough for your classifier. The production labels are saved as `pseudo_labels_merged.npz` (you can rename the final `pseudo_labels_split.npz` or keep the intermediate name in the classifier command below).
 
 3. **Train the MLP classifier** on pseudo-labels:
 
