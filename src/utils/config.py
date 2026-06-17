@@ -325,6 +325,11 @@ class PseudoLabelConfig:
     grad_clip_norm: float = 1.0
     seed: int = 42
 
+    # Checkpoint selection
+    # Smooth validation accuracy over this many epochs before deciding which
+    # checkpoint is best. Helps avoid raw-metric spikes on small validation sets.
+    smooth_window: int = 1
+
     # System
     num_workers: int = 4
     pin_memory: bool = True

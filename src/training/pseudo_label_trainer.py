@@ -108,6 +108,9 @@ class PseudoLabelTrainer:
         self.global_step = 0
         self.start_epoch = 0
         self.best_val_acc = 0.0
+        self.best_smoothed_val_acc = 0.0
+        self._val_acc_history: list[float] = []
+        self._smoothed_val_acc: float | None = None
 
         self.metrics_logger = MetricsLogger(run_dir / "metrics.jsonl")
 
@@ -179,6 +182,18 @@ class PseudoLabelTrainer:
                 max_vram_mb = max_vram / (1024**2)
                 torch.cuda.empty_cache()
 
+            raw_val_acc = float(val_metrics["val_acc"])
+            if raw_val_acc > self.best_val_acc:
+                self.best_val_acc = raw_val_acc
+
+            smooth_window = getattr(self.config, "smooth_window", 1)
+            self._val_acc_history.append(raw_val_acc)
+            window = min(len(self._val_acc_history), smooth_window)
+            self._smoothed_val_acc = float(np.mean(self._val_acc_history[-window:]))
+            is_best = self._smoothed_val_acc > self.best_smoothed_val_acc
+            if is_best:
+                self.best_smoothed_val_acc = self._smoothed_val_acc
+
             metrics = {
                 "epoch": epoch + 1,
                 "global_step": self.global_step,
@@ -186,24 +201,24 @@ class PseudoLabelTrainer:
                 **val_metrics,
                 "max_vram_mb": max_vram_mb,
             }
+            if self._smoothed_val_acc is not None:
+                metrics["val_acc_smooth"] = self._smoothed_val_acc
             self.metrics_logger.log(metrics)
-
-            is_best = val_metrics["val_acc"] > self.best_val_acc
-            if is_best:
-                self.best_val_acc = val_metrics["val_acc"]
 
             self._save_checkpoint(epoch, is_best=is_best)
 
             logger.info(
                 "Epoch %d/%d | train_loss=%.4f | train_acc=%.2f%% | "
-                "val_loss=%.4f | val_acc=%.2f%% | lr=%.2e | vram=%.1fMB | "
-                "throughput=%.1f samples/s%s",
+                "val_loss=%.4f | val_acc=%.2f%% | val_acc_smooth%d=%.4f | "
+                "lr=%.2e | vram=%.1fMB | throughput=%.1f samples/s%s",
                 epoch + 1,
                 self.config.epochs,
                 train_metrics["train_loss"],
                 train_metrics["train_acc"] * 100,
                 val_metrics["val_loss"],
                 val_metrics["val_acc"] * 100,
+                smooth_window,
+                self._smoothed_val_acc,
                 train_metrics["lr"],
                 max_vram_mb,
                 train_metrics["throughput_samples_per_sec"],
@@ -214,8 +229,9 @@ class PseudoLabelTrainer:
                 torch.cuda.reset_peak_memory_stats(self.device)
 
         logger.info(
-            "Training complete. Best val_acc=%.4f",
+            "Training complete. Best val_acc=%.4f, best smoothed val_acc=%.4f",
             self.best_val_acc,
+            self.best_smoothed_val_acc,
         )
 
     def _train_epoch(self, epoch: int) -> dict[str, Any]:
@@ -402,7 +418,10 @@ class PseudoLabelTrainer:
             "step": self.global_step,
             "seed": self.config.seed,
             "config": self.config.to_dict(),
-            "metrics": {"best_val_acc": self.best_val_acc},
+            "metrics": {
+                "best_val_acc": self.best_val_acc,
+                "best_smoothed_val_acc": self.best_smoothed_val_acc,
+            },
             "rng_state": rng_state,
             "argv": self.argv,
         }
@@ -424,6 +443,24 @@ class PseudoLabelTrainer:
         self.start_epoch = checkpoint["epoch"] + 1
         self.global_step = checkpoint.get("step", 0)
         self.best_val_acc = checkpoint.get("metrics", {}).get("best_val_acc", 0.0)
+        self.best_smoothed_val_acc = checkpoint.get("metrics", {}).get(
+            "best_smoothed_val_acc", 0.0
+        )
+        # Rebuild a history from past logged metrics so smoothing can continue.
+        metrics_path = self.run_dir / "metrics.jsonl"
+        self._val_acc_history = []
+        if metrics_path.exists():
+            with open(metrics_path) as fh:
+                for line in fh:
+                    line = line.strip()
+                    if not line:
+                        continue
+                    try:
+                        record = json.loads(line)
+                        if "val_acc" in record:
+                            self._val_acc_history.append(float(record["val_acc"]))
+                    except json.JSONDecodeError:
+                        continue
 
         rng_state = checkpoint.get("rng_state")
         if rng_state is not None:

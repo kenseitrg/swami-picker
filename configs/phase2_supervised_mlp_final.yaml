@@ -3,9 +3,9 @@
 # This is the locked configuration for Phase 3 embedding extraction.
 
 # Data paths
-manifest_path: "data/processed/manifest.json"
-pseudo_labels_path: "data/processed/pseudo_labels.npz"
-feature_path: "data/processed/features/features_descriptors.npz"
+manifest_path: "data/prod/processed/manifest.json"
+pseudo_labels_path: "data/prod/processed/pseudo_labels_split.npz"
+feature_path: "data/prod/processed/features/features_descriptors.npz"
 
 # Model selection
 use_features: true
@@ -32,13 +32,18 @@ use_class_weights: true
 # Training
 batch_size: 32
 accum_steps: 1
-epochs: 200
+epochs: 100
 lr: 1.0e-4
 weight_decay: 0.05
 betas: [0.9, 0.95]
 warmup_ratio: 0.1
 grad_clip_norm: 1.0
 seed: 42
+
+# Checkpoint selection
+# Smooth val_acc over N epochs before choosing best_model.pt.
+# Set to 1 to restore the old raw-metric behaviour.
+smooth_window: 5
 
 # System
 num_workers: 4
