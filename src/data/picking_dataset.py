@@ -151,6 +151,29 @@ class FKPickingDataset(Dataset):
                     m if isinstance(m, dict) else json.loads(m) for m in metadata
                 ]
 
+        expected = len(spectra)
+        for name, arr in (
+            ("picks", picks),
+            ("direct_masks", direct_masks),
+            ("confidences", confidences),
+            ("cluster_labels", cluster_labels),
+            ("spectrum_ids", spectrum_ids),
+        ):
+            if len(arr) != expected:
+                msg = (
+                    f"Length mismatch in {self.npz_path}: spectra has {expected} "
+                    f"samples but {name} has {len(arr)}. Regenerate the file."
+                )
+                raise ValueError(msg)
+
+        if len(metadata) != expected:
+            msg = (
+                f"Length mismatch in {self.npz_path}: spectra has {expected} "
+                f"samples but metadata has {len(metadata)}. "
+                "Regenerate the file with export_annotations.py."
+            )
+            raise ValueError(msg)
+
         return (
             spectra,
             picks,

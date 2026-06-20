@@ -414,9 +414,6 @@ class PickingConfig:
     num_modes: int = 3
     mode_hidden_dim: int = 128
 
-    # U-Net depth: 2 or 3 downsample stages
-    num_downsample: int = 2
-
     # Augmentation (pick-synchronized)
     aug_enabled: bool = True
     aug_noise_std: float = 0.05

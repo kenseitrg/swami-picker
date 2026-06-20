@@ -3,7 +3,7 @@
 # 5-fold cross-validation, fold 0 as validation.
 
 # Data
-training_data_path: "data/processed/phase4_training_data.npz"
+training_data_path: "data/prod/processed/phase4_training_data.npz"
 val_fraction: 0.10
 val_seed: 42
 min_direct_picks: 3

@@ -316,13 +316,18 @@ Hotkeys in the app:
 ```bash
 python scripts/phase3_active_learning/export_annotations.py \
     --session-dirs annotations/<date>_iter0 \
+    --spectra-dir data/processed/spectra \
     --output data/processed/phase4_training_data.npz \
     --min-direct-picks 3
 ```
 
+If your spectra are in a non-standard directory (e.g. `data/prod/processed/spectra`), pass `--spectra-dir` explicitly.
+
 ---
 
 ### Phase 4: Train the picking model
+
+The production Phase 4 model is configured in `configs/phase4_picking.yaml` (U-Net + BiLSTM, 5-fold cross-validation, fold 0 as validation). The current best model on the field dataset is `experiments/phase4-picking-seq-bilstm-v1` (val RMSE≈1.94 px, val F1≈0.93).
 
 ```bash
 python scripts/phase4_picking/train_picking_model.py \
@@ -330,7 +335,7 @@ python scripts/phase4_picking/train_picking_model.py \
     --name phase4-picking-my-run
 ```
 
-The default config trains the U-Net + BiLSTM model with 5-fold cross-validation. Outputs in `experiments/phase4-picking-my-run/`:
+Outputs in `experiments/phase4-picking-my-run/`:
 
 - `checkpoints/best_model.pt`
 - `config.yaml`
@@ -344,6 +349,33 @@ python scripts/phase4_picking/train_picking_model.py \
     --config configs/phase4_picking.yaml \
     --dry-run
 ```
+
+Key production settings in `configs/phase4_picking.yaml`:
+
+| Parameter | Value | Notes |
+|-----------|-------|-------|
+| `model_type` | `seq` | U-Net encoder/decoder + BiLSTM over frequency (current default) |
+| `base_channels` | 16 | Tuned up from v2 for capacity on ~150–500 picks |
+| `embed_dim` | 64 | Bottleneck dimension after the U-Net encoder |
+| `seq_hidden_dim` | 128 | 2-layer BiLSTM hidden dimension |
+| `seq_type` | `bilstm` | Sequence head type |
+| `dropout` | 0.5 | Strong regularization for the small annotation budget |
+| `k_folds` | 5 | Number of CV folds |
+| `fold_index` | 0 | Which fold to use as validation |
+| `aug_freq_shift_max` | 0.0 | Pick-synchronized shifts disabled — too strong for small datasets |
+| `aug_waven_shift_max` | 0.0 | Pick-synchronized shifts disabled |
+| `loss_smooth_weight` | 0.05 | Frequency-axis smoothness penalty on expected pick positions |
+| `direct_pick_weight` | 2.0 | Higher weight for expert-clicked columns |
+| `early_stopping_patience` | 15 | Epochs without smoothed-val-RMSE improvement before stopping |
+| `smooth_window` | 5 | Moving-average window for checkpoint selection |
+
+Alternative configs are kept for reference:
+
+- `configs/phase4_picking_seq_regularized.yaml` — label smoothing + higher weight decay.
+- `configs/phase4_picking_seq_reg_coverage.yaml` — adds `absent_class_weight=0.8` (produced mode jumps; not recommended).
+- `configs/phase4_picking_multimode.yaml` — experimental multi-mode head (assignment degeneracy, not default).
+
+For a full architecture/metric history, see `experiments/MODEL_CHANGELOG.md`.
 
 ---
 
