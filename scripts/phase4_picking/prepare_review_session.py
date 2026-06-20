@@ -91,12 +91,43 @@ def _load_low_quality_spectrum_ids(run_dir: Path) -> tuple[list[str], dict[str, 
         raise FileNotFoundError(f"Low-quality report not found: {path}")
 
     data = json.loads(path.read_text())
-    spectrum_ids = data["spectrum_ids"]
-    if not spectrum_ids:
-        raise ValueError("No low-quality spectra found.")
+    spectrum_ids = list(data["spectrum_ids"])
 
     logger.info("Loaded %d low-quality spectrum IDs from %s", len(spectrum_ids), path)
     return spectrum_ids, data
+
+
+def _load_zero_coverage_spectrum_ids(run_dir: Path) -> list[str]:
+    """Find spectra where the model predicted no picks at all.
+
+    These are not always captured by percentile-based triage (a spectrum
+    with coverage=0 can still have an average composite score), so they
+    are explicitly added to the review session.
+    """
+    predictions_path = run_dir / "predictions.npz"
+    if not predictions_path.exists():
+        logger.warning(
+            "Predictions file not found at %s; cannot check for zero coverage.",
+            predictions_path,
+        )
+        return []
+
+    data = np.load(predictions_path, allow_pickle=True)
+    try:
+        spectrum_ids = data["spectrum_ids"]
+        picks = data["picks"]
+        coverage = (picks >= 0).sum(axis=1)
+        zero_indices = np.nonzero(coverage == 0)[0]
+        zero_ids = [str(spectrum_ids[i]) for i in zero_indices]
+    finally:
+        data.close()
+
+    logger.info(
+        "Found %d spectra with zero predicted coverage in %s",
+        len(zero_ids),
+        predictions_path,
+    )
+    return zero_ids
 
 
 def _load_quality_scores(run_dir: Path) -> dict[str, dict[str, Any]]:
@@ -125,12 +156,18 @@ def _print_summary(
     spectrum_ids: list[str],
     quality_scores: dict[str, dict[str, Any]],
     cluster_map: dict[str, int],
+    low_quality_count: int = 0,
+    zero_coverage_count: int = 0,
+    added_zero_coverage: int = 0,
 ) -> None:
     lines = Counter(sid.split("_")[0] for sid in spectrum_ids)
     clusters = Counter(cluster_map.get(sid, -1) for sid in spectrum_ids)
 
     print("\nRe-annotation session summary:")
     print(f"  Spectra: {len(spectrum_ids)}")
+    print(f"    - Low quality (percentile triage): {low_quality_count}")
+    print(f"    - Zero predicted coverage:         {zero_coverage_count}")
+    print(f"    - Zero-coverage not already in low-quality list: {added_zero_coverage}")
     print(f"  Lines:   {len(lines)}")
     print("\nPer-line counts:")
     for line, count in sorted(lines.items()):
@@ -173,10 +210,32 @@ def main() -> int:
     )
 
     spectrum_ids, low_quality_report = _load_low_quality_spectrum_ids(args.run_dir)
+    zero_coverage_ids = _load_zero_coverage_spectrum_ids(args.run_dir)
+
+    # Merge zero-coverage spectra into the review list, preserving order
+    # and deduplicating.
+    seen = set(spectrum_ids)
+    added_zero_coverage = 0
+    for sid in zero_coverage_ids:
+        if sid not in seen:
+            spectrum_ids.append(sid)
+            seen.add(sid)
+            added_zero_coverage += 1
+
+    if not spectrum_ids:
+        raise ValueError("No low-quality or zero-coverage spectra found.")
+
     quality_scores = _load_quality_scores(args.run_dir)
     cluster_map = _load_cluster_map(args.embeddings)
 
-    _print_summary(spectrum_ids, quality_scores, cluster_map)
+    _print_summary(
+        spectrum_ids,
+        quality_scores,
+        cluster_map,
+        low_quality_count=len(low_quality_report.get("spectrum_ids", [])),
+        zero_coverage_count=len(zero_coverage_ids),
+        added_zero_coverage=added_zero_coverage,
+    )
 
     if not args.yes and not _confirm():
         print("Aborted.")
