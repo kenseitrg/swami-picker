@@ -61,6 +61,15 @@ def _parse_args() -> argparse.Namespace:
         action="store_true",
         help="Include spectra whose cluster label is -1 (noise).",
     )
+    parser.add_argument(
+        "--spectra-dir",
+        type=Path,
+        default=Path("data/processed/spectra"),
+        help=(
+            "Directory containing preprocessed spectra (*.npz + *.json). "
+            "Defaults to data/processed/spectra."
+        ),
+    )
     return parser.parse_args()
 
 
@@ -156,11 +165,12 @@ def _collect_annotations(
     return records
 
 
-def _load_spectrum(spectrum_id: str) -> np.ndarray:
+def _load_spectrum(spectrum_id: str, spectra_dir: Path) -> np.ndarray:
     """Load the preprocessed spectrum tensor from disk.
 
     Args:
         spectrum_id: Canonical spectrum identifier.
+        spectra_dir: Directory containing preprocessed spectra.
 
     Returns:
         Tensor of shape ``(256, 256)`` in ``float32``.
@@ -168,7 +178,7 @@ def _load_spectrum(spectrum_id: str) -> np.ndarray:
     Raises:
         FileNotFoundError: If the spectrum file is missing.
     """
-    npz_path = Path(f"data/processed/spectra/{spectrum_id}.npz")
+    npz_path = spectra_dir / f"{spectrum_id}.npz"
     data = np.load(npz_path)
     try:
         tensor = np.array(data["tensor"], dtype=np.float32)
@@ -228,14 +238,17 @@ def main() -> int:
     spectrum_ids = np.empty(n, dtype=object)
     metadata_list: list[dict[str, Any]] = []
 
-    for i, rec in enumerate(records):
+    kept = 0
+    for rec in records:
         sid = rec["spectrum_id"]
         try:
-            tensor = _load_spectrum(sid)
+            tensor = _load_spectrum(sid, args.spectra_dir)
         except FileNotFoundError:
             logger.warning("Spectrum %s not found; skipping.", sid)
             continue
 
+        i = kept
+        kept += 1
         spectra[i, 0] = tensor
         picks[i] = rec["wavenumber_picks"]
         direct_masks[i] = rec["direct_mask"]
@@ -244,12 +257,25 @@ def main() -> int:
         spectrum_ids[i] = sid
 
         # Load metadata JSON sidecar.
-        meta_path = Path(f"data/processed/spectra/{sid}.json")
+        meta_path = args.spectra_dir / f"{sid}.json"
         meta: dict[str, Any] = {}
         if meta_path.exists():
             with open(meta_path) as fh:
                 meta = json.load(fh)
         metadata_list.append(meta)
+
+    if kept == 0:
+        logger.error("No spectra found in %s. Export aborted.", args.spectra_dir)
+        return 1
+
+    # Trim arrays to the number of spectra we actually loaded.
+    spectra = spectra[:kept]
+    picks = picks[:kept]
+    direct_masks = direct_masks[:kept]
+    confidences = confidences[:kept]
+    cluster_labels = cluster_labels[:kept]
+    spectrum_ids = spectrum_ids[:kept]
+    n = kept
 
     # ── Write output ────────────────────────────────────────────────
     args.output.parent.mkdir(parents=True, exist_ok=True)

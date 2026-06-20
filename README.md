@@ -294,6 +294,14 @@ python scripts/phase3_active_learning/launch_app.py \
     --session-dir annotations/<date>_iter0
 ```
 
+If your spectra are in a non-standard directory (e.g. `data/prod/processed/spectra`), pass it explicitly:
+
+```bash
+python scripts/phase3_active_learning/launch_app.py \
+    --session-dir annotations/<date>_iter0 \
+    --spectra-dir data/prod/processed/spectra
+```
+
 Hotkeys in the app:
 
 - `Click` — add pick, `Right-click` — remove nearest pick.

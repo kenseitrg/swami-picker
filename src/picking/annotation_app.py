@@ -60,7 +60,11 @@ class AnnotationApp(tk.Tk):
     Right click — remove the nearest pick (within 2 columns).
     """
 
-    def __init__(self, session_dir: Path) -> None:
+    def __init__(
+        self,
+        session_dir: Path,
+        spectra_dir: Path | None = None,
+    ) -> None:
         super().__init__()
         self.session_dir = Path(session_dir)
 
@@ -69,6 +73,13 @@ class AnnotationApp(tk.Tk):
         self.queue: list[str] = self.manifest["spectra_ordered"]
         self.annotations_dir = Path(self.manifest["annotations_dir"])
         self.annotations_dir.mkdir(parents=True, exist_ok=True)
+
+        if spectra_dir is not None:
+            self.spectra_dir = Path(spectra_dir)
+        else:
+            # Backwards-compatible default: assume the app is launched from
+            # the repository root and spectra live under data/processed/spectra.
+            self.spectra_dir = Path("data/processed/spectra")
 
         self.cluster_map = self._build_cluster_map()
 
@@ -187,9 +198,7 @@ class AnnotationApp(tk.Tk):
         spectrum_id = self.queue[self.current_idx]
 
         try:
-            spectrum = load_preprocessed_spectrum(
-                spectrum_id, Path("data/processed/spectra")
-            )
+            spectrum = load_preprocessed_spectrum(spectrum_id, self.spectra_dir)
             self.spectrum_tensor = spectrum.tensor
             self.spectrum_meta = spectrum.metadata
         except FileNotFoundError:

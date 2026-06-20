@@ -29,6 +29,15 @@ def _parse_args() -> argparse.Namespace:
         required=True,
         help="Path to the session directory created by prepare_session.py.",
     )
+    parser.add_argument(
+        "--spectra-dir",
+        type=Path,
+        default=None,
+        help=(
+            "Directory containing preprocessed spectra (*.npz + *.json). "
+            "Defaults to data/processed/spectra relative to the launch CWD."
+        ),
+    )
     return parser.parse_args()
 
 
@@ -50,7 +59,7 @@ def main() -> int:
         logging.error("Session manifest not found: %s", manifest_path)
         return 1
 
-    app = AnnotationApp(args.session_dir)
+    app = AnnotationApp(args.session_dir, spectra_dir=args.spectra_dir)
     app.run()
     return 0
 
